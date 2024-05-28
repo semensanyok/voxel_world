@@ -1,0 +1,84 @@
+{
+    "version": 3,
+    "configurePresets": [
+        {
+            "name": "windows-base",
+            "description": "Target Windows with the Visual Studio development environment.",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "installDir": "${sourceDir}/install/${presetName}",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "cl.exe",
+                "CMAKE_CXX_COMPILER": "cl.exe",
+                "PKG_CONFIG_EXECUTABLE": "D:/__OpenSource/vcpkg/vcpkg.exe",
+                "BOOST_ROOT": "D:/__OpenSource/boost_install",
+                "TBB_ROOT": "C:/Program Files (x86)/Intel/oneAPI/tbb/latest",
+                "BLOSC_ROOT": "D:/__OpenSource/c-blosc_install",
+                "ZLIB_ROOT": "D:/__OpenSource/zlib131/zlib131_install_x64",
+                "glm_DIR": "D:/__OpenSource/vcpkg/packages/glm_x86-windows/share/glm",
+                "SDL2_DIR": "C:/Program Files (x86)/SDL2/cmake",
+                "SDL2_image_DIR": "C:/Program Files (x86)/SDL2_image-2.8.2",
+                "OpenVDB_DIR": "D:/__OpenSource/openvdb_install/lib/cmake/OpenVDB",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "1",
+                "GLAD_DIR": "D:/__OpenSource/glad/cmake/"
+            },
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Windows"
+            }
+        },
+        {
+            "name": "x64-debug",
+            "displayName": "x64 Debug",
+            "description": "Target Windows (64-bit) with the Visual Studio development environment. (Debug)",
+            "inherits": "windows-base",
+            "architecture": {
+                "value": "x64",
+                "strategy": "external"
+            },
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        },
+        {
+            "name": "x64-release",
+            "displayName": "x64 Release",
+            "description": "Target Windows (64-bit) with the Visual Studio development environment. (RelWithDebInfo)",
+            "inherits": "windows-base",
+            "architecture": {
+                "value": "x64",
+                "strategy": "external"
+            },
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+            }
+        },
+        {
+            "name": "x86-debug",
+            "displayName": "x86 Debug",
+            "description": "Target Windows (32-bit) with the Visual Studio development environment. (Debug)",
+            "inherits": "windows-base",
+            "architecture": {
+                "value": "x86",
+                "strategy": "external"
+            },
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        },
+        {
+            "name": "x86-release",
+            "displayName": "x86 Release",
+            "description": "Target Windows (32-bit) with the Visual Studio development environment. (RelWithDebInfo)",
+            "inherits": "x86-debug",
+            "architecture": {
+                "value": "x86",
+                "strategy": "external"
+            },
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+            }
+        }
+    ]
+}
