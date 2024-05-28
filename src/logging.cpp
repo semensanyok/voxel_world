@@ -3,7 +3,7 @@
 #include <cstdio>
 
 void log(SEVERITY_LEVEL severity, const char *function,
-         const char *file, int line, const char *fmt, int argc, va_list) {
+         const char *file, int line, const char *fmt, int argc, ...) {
   const char* level_str;
   switch (severity) {
   case DEBUG:
