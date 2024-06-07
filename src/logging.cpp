@@ -2,7 +2,7 @@
 #include <cstdarg>
 #include <cstdio>
 
-void log(SEVERITY_LEVEL severity, const char *function,
+void log(int severity, const char *function,
          const char *file, int line, const char *fmt, int argc, ...) {
   const char* level_str;
   switch (severity) {
@@ -21,7 +21,7 @@ void log(SEVERITY_LEVEL severity, const char *function,
   const char* fmt_loc = "at: %s (%s:%i)\n";
   va_list argv;
   va_start(argv, argc);
-  fprintf(stderr, fmt, argv);
+  vfprintf(stderr, fmt, argv);
   va_end(argv);
   fprintf(stderr, fmt_loc, level_str, function, file, line);
 };

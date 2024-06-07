@@ -1,11 +1,14 @@
 #include "renderer_context.h"
 #include "logging.h"
 #include "settings_global.h"
-#include <iostream>
 #include <SDL_image.h>
 #include <SDL.h>
+#include <glad/gl.h>
 
-namespace RendererContext {
+namespace VW_RendererContext {
+
+SDL_Window *window;
+SDL_GLContext context;
 
 int init_GL_context() {
   SDL_Init(SDL_INIT_VIDEO);
@@ -28,8 +31,7 @@ int init_GL_context() {
 #endif
 
   SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 4);
-  // #ifndef USE_GTK_BACKEND
-  window = SDL_CreateWindow("caveview", SDL_WINDOWPOS_CENTERED,
+  window = SDL_CreateWindow("voxel_world", SDL_WINDOWPOS_CENTERED,
                             SDL_WINDOWPOS_CENTERED, GameSettings::SCR_WIDTH,
                             GameSettings::SCR_HEIGHT,
                             SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE |
@@ -37,7 +39,6 @@ int init_GL_context() {
   );
   if (!window)
     LOG_ERROR("Couldn't create window");
-  // #endif // USE_GTK_BACKEND
 
   context = SDL_GL_CreateContext(window);
   if (!context)
@@ -51,12 +52,6 @@ int init_GL_context() {
   // enable VSync
   SDL_GL_SetSwapInterval(1);
 
-  if (!gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress)) {
-    LOG_ERROR("[ERROR] Couldn't initialize glad");
-  } else {
-    LOG_ERROR("[INFO] glad initialized\n");
-  }
-
   glEnable(GL_BLEND);
   glEnable(GL_DEPTH_TEST);
   glEnable(GL_STENCIL_TEST);
@@ -66,13 +61,14 @@ int init_GL_context() {
   glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, NULL,
                         GL_TRUE);
 
-  Gui::InitGuiContext(window, context);
+  // Gui::InitGuiContext(window, context);
+  return 0;
 }
 
 void clear_context() {
-  SDL_GL_DeleteContext(context);
-  SDL_DestroyWindow(window);
+  SDL_GL_DeleteContext(VW_RendererContext::context);
+  SDL_DestroyWindow(VW_RendererContext::window);
   SDL_Quit();
 }
 
-} // namespace RendererContext
+} // namespace VW_RendererContext

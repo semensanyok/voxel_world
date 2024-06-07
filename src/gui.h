@@ -11,15 +11,14 @@
 #include "Camera.h"
 #include "StateManager.h"
 
-using namespace std;
-
 struct ButtonGui {
 	const char* label;
-	function<void()> callback;
+        std::function<void()> callback;
 };
 
 class Gui {
-	static inline vector<ButtonGui> buttons_callbacks;
+  static inline std::vector<ButtonGui> buttons_callbacks;
+
 public:
 	static inline bool enable = true;
 
@@ -31,8 +30,8 @@ public:
 		ImGui::CreateContext();
 		ImGuiIO& io = ImGui::GetIO();
 		ImGui::StyleColorsDark();
-		ImGui_ImplSDL2_InitForOpenGL(window, context);
-		const char* glsl_version = "#version 460";
+                std::ImGui_ImplSDL2_InitForOpenGL(window, context);
+                const char* glsl_version = "#version 460";
 		ImGui_ImplOpenGL3_Init(glsl_version);
 	}
 	static void AddButton(ButtonGui button) {
@@ -49,18 +48,29 @@ public:
 		static bool show_another_window = true;
 
 		ImGui_ImplOpenGL3_NewFrame();
-		ImGui_ImplSDL2_NewFrame(window);
-		ImGui::NewFrame();
+                std::ImGui_ImplSDL2_NewFrame(window);
+                ImGui::NewFrame();
 
 		{
 			ImGui::SetNextWindowPos(ImVec2(0, 0));
 			ImGui::Begin("Camera");
-            ImGui::InputFloat3("POSITION", &camera->pos[0], "%.0f", ImGuiInputTextFlags_None);
-			ImGui::Text("Yaw: %.1f Pitch: %.1f", camera->yaw_angle, camera->pitch_angle);
-			ImGui::Text("Right: %.1f %.1f %.1f", camera->right.x, camera->right.y, camera->right.z);
-			ImGui::Text("Up: %.1f %.1f %.1f", camera->up.x, camera->up.y, camera->up.z);
-			ImGui::Text("direction: %.1f %.1f %.1f", camera->direction.x, camera->direction.y, camera->direction.z);
-			ImGui::End();
+                        ImGui::InputFloat3("POSITION", &camera->std::pos[0],
+                                           "%.0f", ImGuiInputTextFlags_None);
+                        ImGui::Text("Yaw: %.1f Pitch: %.1f",
+                                    camera->std::yaw_angle,
+                                    camera->std::pitch_angle);
+                        ImGui::Text("Right: %.1f %.1f %.1f",
+                                    camera->std::right.std::x,
+                                    camera->std::right.std::y,
+                                    camera->std::right.std::z);
+                        ImGui::Text(
+                            "Up: %.1f %.1f %.1f", camera->std::up.std::x,
+                            camera->std::up.std::y, camera->std::up.std::z);
+                        ImGui::Text("direction: %.1f %.1f %.1f",
+                                    camera->std::direction.std::x,
+                                    camera->std::direction.std::y,
+                                    camera->std::direction.std::z);
+                        ImGui::End();
 		}
 		{
 			ImGui::SetNextWindowPos(ImVec2(0, 20));

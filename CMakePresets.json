@@ -20,7 +20,7 @@
                 "SDL2_image_DIR": "C:/Program Files (x86)/SDL2_image-2.8.2",
                 "OpenVDB_DIR": "D:/__OpenSource/openvdb_install/lib/cmake/OpenVDB",
                 "CMAKE_EXPORT_COMPILE_COMMANDS": "1",
-                "GLAD_DIR": "D:/__OpenSource/glad/cmake/"
+                "GLAD_DIR": "D:/__OpenSource/glad/"
             },
             "condition": {
                 "type": "equals",

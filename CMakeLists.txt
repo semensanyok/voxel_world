@@ -1,13 +1,31 @@
 cmake_minimum_required(VERSION 3.0.0)
 project(voxel_world VERSION 0.1.0 LANGUAGES C CXX)
 
+# nvim clangd LSP server issue
+#   workaround to trick buggy clangd to think we use c++20 but compile with c++23
+#   > cl : Command line warning D9025 : overriding '/std:c++20' with '/std:c++latest'
+#   UPDATE: fixed with 
+#   '''
+#      cat <<EOF > .clangd
+#      CompileFlags:
+#        Add: [ "-std:c++latest" ]
+#      EOF
+#   '''
+#   OR
+#   '''
+#       set(CMAKE_CXX_STANDARD 20)
+#       add_compile_options(/std:c++latest)
+#       add_compile_options(-std:c++23)
+#   '''
 set(CMAKE_CXX_STANDARD 23)
+
+# mysterious advice given by MSVC compiler. somehow windows specific.
+add_compile_options(/bigobj)
 
 include(CmakeUtils.cmake)
 
 set(ENGINE_SRC_DIR ${CMAKE_CURRENT_LIST_DIR}/src)
 set(ENGINE_DEP_DIR ${CMAKE_CURRENT_LIST_DIR}/dependencies)
-
 include(CTest)
 enable_testing()
 
@@ -20,6 +38,22 @@ find_package(OpenVDB REQUIRED)
 find_package(SDL2 REQUIRED)
 find_package(SDL2_image REQUIRED)
 
+# copy to bin dir to save dev time. TODO: remove. package dlls.
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    message("-- Debug build")
+    file(COPY ${_TBB_ROOT}/bin/tbb12_debug.dll DESTINATION ${CMAKE_BINARY_DIR})
+    file(COPY ${_OPENVDB_ROOT}/bin/openvdb.dll DESTINATION ${CMAKE_BINARY_DIR})
+    file(COPY ${Blosc_INCLUDE_DIR}/../bin/blosc.dll DESTINATION ${CMAKE_BINARY_DIR})
+    file(COPY ${ZLIB_INCLUDE_DIR}/../bin/zlibd.dll DESTINATION ${CMAKE_BINARY_DIR})
+elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
+    message("-- Release build")
+elseif(CMAKE_BUILD_TYPE STREQUAL "MinSizeRel")
+    message("-- Minimum size release build")
+elseif(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+    message("-- Release build with debug information")
+else()
+    message("-- Unknown build type") # <---- This is the result, why?
+endif()
 
 add_definitions(-DIMGUI_IMPL_OPENGL_LOADER_GLAD)
 set(IMGUI_SOURCES
@@ -32,22 +66,28 @@ set(IMGUI_SOURCES
     "${ENGINE_DEP_DIR}/imgui/imgui_tables.cpp"
 )
 
-add_subdirectory("${GLAD_DIR}" "${CMAKE_BINARY_DIR}/glad_build")
-glad_add_library(glad_gl_core_33 SHARED API gl:core=3.3)
+set(SDL_OPENGL_VERSION_MAJOR 4)
+set(SDL_OPENGL_VERSION_MINOR 6)
+set(SDL_OPENGL_PROFILE core)
+set(SDL_OPENGL_LIB_NAME glad_gl_${SDL_OPENGL_PROFILE}_${SDL_OPENGL_VERSION_MAJOR}${SDL_OPENGL_VERSION_MINOR})
+add_subdirectory("${GLAD_DIR}/cmake" "${CMAKE_BINARY_DIR}/glad_build")
+glad_add_library(${SDL_OPENGL_LIB_NAME} SHARED API gl:${SDL_OPENGL_PROFILE}=${SDL_OPENGL_VERSION_MAJOR}.${SDL_OPENGL_VERSION_MINOR})
 
 add_executable(voxel_world 
 	${IMGUI_SOURCES} 
 	${ENGINE_SRC_DIR}/main.cpp 
 	${ENGINE_SRC_DIR}/logging.cpp
+	${ENGINE_SRC_DIR}/logging.cpp
+	${ENGINE_SRC_DIR}/renderer_context.cpp
 )
-target_link_libraries(voxel_world OpenVDB::openvdb ${SDL2_LIBRARIES} SDL2_image::SDL2_image glm::glm glad_gl_core_33)
+target_link_libraries(voxel_world OpenVDB::openvdb ${SDL2_LIBRARIES} SDL2_image::SDL2_image glm::glm ${SDL_OPENGL_LIB_NAME})
 target_include_directories(voxel_world PUBLIC 
 		    ${ENGINE_SRC_DIR} 
                     ${SDL2_INCLUDE_DIR} 
                     "${ENGINE_DEP_DIR}/imgui/" 
-                    "${ENGINE_DEP_DIR}/imgui/backends/"
+                    "${ENGINE_DEP_DIR}/imgui/backends/" 
+		    "${GLAD_DIR}/glad/include/"
 )
-# MY_PRINT_ALL_VARIABLES()
 IF ( CMAKE_EXPORT_COMPILE_COMMANDS )
 	execute_process(
 	   COMMAND ${CMAKE_COMMAND} -E create_symlink
@@ -58,3 +98,5 @@ endif()
 set(CPACK_PROJECT_NAME ${PROJECT_NAME})
 set(CPACK_PROJECT_VERSION ${PROJECT_VERSION})
 include(CPack)
+
+MY_PRINT_ALL_VARIABLES()
