@@ -4,7 +4,6 @@
 
 void log(int severity, const char *function,
          const char *file, int line, const char *fmt, int argc, ...) {
-  const char* level_str;
   switch (severity) {
   case DEBUG:
     fprintf(stderr, "%s: ", "DEBUG");
@@ -23,5 +22,5 @@ void log(int severity, const char *function,
   va_start(argv, argc);
   vfprintf(stderr, fmt, argv);
   va_end(argv);
-  fprintf(stderr, fmt_loc, level_str, function, file, line);
+  fprintf(stderr, fmt_loc, function, file, line);
 };

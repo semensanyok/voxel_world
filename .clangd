@@ -1,2 +1,2 @@
 CompileFlags:
- Add: [ "-std:c++latest" ]
+ Add: [ "-std:c++latest", "-ID:\\__OpenSource\\openvdb_install\\include" ]

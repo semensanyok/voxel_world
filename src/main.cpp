@@ -2,10 +2,11 @@
 #include "SDL_image.h"
 #include "logging.h"
 #include "grids.h"
+#include <openvdb/tools/VolumeToMesh.h>
 
 int main(int argc, char *argv[]) {
   auto gr = VW::get_grid_example_0();
-
+  
   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) < 0) {
     FLOG_ERROR("Error SDL2 Initialization : %s", 1, SDL_GetError());
     return 1;
