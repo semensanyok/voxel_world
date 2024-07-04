@@ -24,3 +24,10 @@ void log(int severity, const char *function,
   va_end(argv);
   fprintf(stderr, fmt_loc, function, file, line);
 };
+void FLOG_ERROR(const char *fmt, const int argc...) {
+  std::va_list args;
+  va_start(args, argc);
+  log(SEVERITY_LEVEL::ERROR, __FUNCTION__, __FILE__, __LINE__, fmt, argc, args);
+  va_end(args);
+}
+

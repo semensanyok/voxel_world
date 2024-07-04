@@ -1,2 +1,7 @@
+# msvc compiler
+# CompileFlags:
+#  Add: [ "-std:c++latest", "-ID:\\__OpenSource\\openvdb_install\\include" ]
+# emscripten compiler (emcc), using clang internally
 CompileFlags:
- Add: [ "-std:c++latest", "-ID:\\__OpenSource\\openvdb_install\\include" ]
+ Add: [ "/std:c++latest", "-ID:\\__OpenSource\\openvdb_install\\include" ]
+ Compiler: clang++
