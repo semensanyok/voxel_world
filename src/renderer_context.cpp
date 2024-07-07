@@ -1,9 +1,8 @@
-#include "renderer_context.h"
 #include "logging.h"
 #include "settings_global.h"
-#include <SDL_image.h>
-#include <SDL.h>
 #include <glad/gl.h>
+// #include <SDL_image.h>
+#include <SDL.h>
 
 namespace VW_RendererContext {
 

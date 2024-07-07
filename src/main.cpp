@@ -1,4 +1,5 @@
-#include "SDL.h"
+#include <glad/gl.h>
+#include <SDL.h>
 #include "SDL_image.h"
 #include "logging.h"
 #include "grids.h"
