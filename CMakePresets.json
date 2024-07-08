@@ -132,6 +132,7 @@
                 "CMAKE_C_COMPILER": "clang",
                 "CMAKE_CXX_COMPILER": "clang",
                 "CMAKE_CXX_FLAGS": "-static -fms-runtime-lib=static_dbg",
+                "CMAKE_CXX_FLAGS_DEBUG": "-static -fms-runtime-lib=static_dbg",
                 "SDL2_DIR": "D:/__OpenSource/SDL2_install_x86/cmake",
                 "SDL2_image_DIR": "D:/__OpenSource/SDL_image_install_x86/cmake",
                 "ZLIB_ROOT": "D:/__OpenSource/zlib131/zlib131_install_x86",

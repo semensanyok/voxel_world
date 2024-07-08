@@ -28,10 +28,8 @@ enable_testing()
 # repo only installs deprecated FindOpenVDB.cmake and latest cmake automatically seeks one of [OpenVDBConfig.cmake, openvdb-config.cmake]
 list(APPEND CMAKE_MODULE_PATH 
 	"${OpenVDB_DIR}")
-
 find_package(glm REQUIRED)
-find_package(OpenVDB REQUIRED 
-)
+find_package(OpenVDB REQUIRED )
 
 # find_package(SDL2 REQUIRED)
 # find_package(SDL2_image REQUIRED)
