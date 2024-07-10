@@ -36,8 +36,6 @@ find_package(OpenVDB REQUIRED )
 # find_package(TBB REQUIRED)
 find_package(TBB
 REQUIRED             # Fail with error if Tbb is not found
-COMPONENTS tbb # Tbb libraries by their canonical name
-# e.g. "tbb" for "libtbb"
 )
 set(RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 # copy to bin dir to save dev time. TODO: remove. package dlls.
@@ -48,7 +46,8 @@ if("${CMAKE_CXX_COMPILER}" STREQUAL "cl")
 endif()
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     message("-- Debug build")
-    # file(COPY ${_TBB_ROOT}/bin/tbb12_debug.dll DESTINATION ${CMAKE_BINARY_DIR}${MY_CMAKE_EXECUTABLE_SUBDIR})
+    file(COPY ${_TBB_ROOT}/bin/tbb12_debug.dll DESTINATION ${CMAKE_BINARY_DIR}${MY_CMAKE_EXECUTABLE_SUBDIR})
+    # file(COPY ${_TBB_ROOT}/bin/tbb_debug.dll DESTINATION ${CMAKE_BINARY_DIR}${MY_CMAKE_EXECUTABLE_SUBDIR})
     # file(COPY ${_OPENVDB_ROOT}/bin/openvdb.dll DESTINATION ${CMAKE_BINARY_DIR}${MY_CMAKE_EXECUTABLE_SUBDIR})
     # file(COPY ${Blosc_INCLUDE_DIR}/../bin/blosc.dll DESTINATION ${CMAKE_BINARY_DIR}${MY_CMAKE_EXECUTABLE_SUBDIR})
     # file(COPY ${ZLIB_INCLUDE_DIR}/../bin/zlibd.dll DESTINATION ${CMAKE_BINARY_DIR}${MY_CMAKE_EXECUTABLE_SUBDIR})
@@ -122,7 +121,7 @@ target_include_directories(voxel_world PRIVATE
 		    "${GLAD_DIR}/glad/include/"
 		    "${Boost_INCLUDE_DIR}"
 )
-
+# target_link_options(voxel_world /NODEFAULTLIB)
 IF ( CMAKE_EXPORT_COMPILE_COMMANDS )
 	execute_process(
 	   COMMAND ${CMAKE_COMMAND} -E create_symlink

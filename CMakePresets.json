@@ -133,11 +133,13 @@
                 "CMAKE_CXX_COMPILER": "clang",
                 "CMAKE_CXX_FLAGS": "-static -fms-runtime-lib=static_dbg",
                 "CMAKE_CXX_FLAGS_DEBUG": "-static -fms-runtime-lib=static_dbg",
+
                 "SDL2_DIR": "D:/__OpenSource/SDL2_install_x86/cmake",
                 "SDL2_image_DIR": "D:/__OpenSource/SDL_image_install_x86/cmake",
                 "ZLIB_ROOT": "D:/__OpenSource/zlib131/zlib131_install_x86",
                 "OpenVDB_DIR": "D:/__OpenSource/openvdb_install_x86/lib/cmake/OpenVDB",
-                "TBB_ROOT": "C:/Program Files (x86)/Intel/oneAPI/tbb/latest",
+                "BLOSC_ROOT": "D:/__OpenSource/c-blosc_install_x86",
+                "TBB_ROOT": "D:/__OpenSource/tbb_install_x86",
                 "_SILENCE_CXX23_DENORM_DEPRECATION_WARNING": "True",
                 "CMAKE_TRY_COMPILE_TARGET_TYPE": "STATIC_LIBRARY"
             }
