@@ -17,7 +17,7 @@
                 "ZLIB_ROOT": "D:/__OpenSource/zlib131/zlib131_install_x64",
                 "glm_DIR": "D:/__OpenSource/vcpkg/packages/glm_x86-windows/share/glm",
                 "SDL2_DIR": "C:/Program Files (x86)/SDL2/cmake",
-                "SDL2_image_DIR": "C:/Program Files (x86)/SDL2_image-2.8.2",
+                "SDL2_image_DIR": "D:/__OpenSource/SDL_image_install_x64/cmake",
                 "OpenVDB_DIR": "D:/__OpenSource/openvdb_install/lib/cmake/OpenVDB",
                 "CMAKE_EXPORT_COMPILE_COMMANDS": "1",
                 "GLAD_DIR": "D:/__OpenSource/glad/"

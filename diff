@@ -1,0 +1,466 @@
+diff --git a/.clangd b/.clangd
+index 72fd337..8f6861e 100644
+--- a/.clangd
++++ b/.clangd
+@@ -1,7 +1,2 @@
+-# msvc compiler
+-# CompileFlags:
+-#  Add: [ "-std:c++latest", "-ID:\\__OpenSource\\openvdb_install\\include" ]
+-# emscripten compiler (emcc), using clang internally
+ CompileFlags:
+- Add: [ "/std:c++latest", "-ID:\\__OpenSource\\openvdb_install\\include" ]
+- Compiler: clang++
++ Add: [ "-std:c++latest", "-ID:\\__OpenSource\\openvdb_install\\include" ]
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index b052535..bc6cbb5 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -18,6 +18,10 @@ project(voxel_world VERSION 0.1.0 LANGUAGES C CXX)
+ #       add_compile_options(-std:c++23)
+ #   '''
+ set(CMAKE_CXX_STANDARD 23)
++
++# mysterious advice given by MSVC compiler. somehow windows specific.
++add_compile_options(/bigobj)
++
+ include(CmakeUtils.cmake)
+ 
+ set(ENGINE_SRC_DIR ${CMAKE_CURRENT_LIST_DIR}/src)
+@@ -28,29 +32,19 @@ enable_testing()
+ # repo only installs deprecated FindOpenVDB.cmake and latest cmake automatically seeks one of [OpenVDBConfig.cmake, openvdb-config.cmake]
+ list(APPEND CMAKE_MODULE_PATH 
+ 	"${OpenVDB_DIR}")
++
+ find_package(glm REQUIRED)
+-find_package(OpenVDB REQUIRED )
++find_package(OpenVDB REQUIRED)
++find_package(SDL2 REQUIRED)
++find_package(SDL2_image REQUIRED)
+ 
+-# find_package(SDL2 REQUIRED)
+-# find_package(SDL2_image REQUIRED)
+-# find_package(TBB REQUIRED)
+-find_package(TBB
+-REQUIRED             # Fail with error if Tbb is not found
+-)
+-set(RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+ # copy to bin dir to save dev time. TODO: remove. package dlls.
+-set(MY_CMAKE_EXECUTABLE_SUBDIR "")
+-if("${CMAKE_CXX_COMPILER}" STREQUAL "cl")
+-    message("-- MSBuild build")
+-    set(MY_CMAKE_EXECUTABLE_SUBDIR "/Debug")
+-endif()
+ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+     message("-- Debug build")
+-    file(COPY ${_TBB_ROOT}/bin/tbb12_debug.dll DESTINATION ${CMAKE_BINARY_DIR}${MY_CMAKE_EXECUTABLE_SUBDIR})
+-    # file(COPY ${_TBB_ROOT}/bin/tbb_debug.dll DESTINATION ${CMAKE_BINARY_DIR}${MY_CMAKE_EXECUTABLE_SUBDIR})
+-    # file(COPY ${_OPENVDB_ROOT}/bin/openvdb.dll DESTINATION ${CMAKE_BINARY_DIR}${MY_CMAKE_EXECUTABLE_SUBDIR})
+-    # file(COPY ${Blosc_INCLUDE_DIR}/../bin/blosc.dll DESTINATION ${CMAKE_BINARY_DIR}${MY_CMAKE_EXECUTABLE_SUBDIR})
+-    # file(COPY ${ZLIB_INCLUDE_DIR}/../bin/zlibd.dll DESTINATION ${CMAKE_BINARY_DIR}${MY_CMAKE_EXECUTABLE_SUBDIR})
++    file(COPY ${_TBB_ROOT}/bin/tbb12_debug.dll DESTINATION ${CMAKE_BINARY_DIR})
++    file(COPY ${_OPENVDB_ROOT}/bin/openvdb.dll DESTINATION ${CMAKE_BINARY_DIR})
++    file(COPY ${Blosc_INCLUDE_DIR}/../bin/blosc.dll DESTINATION ${CMAKE_BINARY_DIR})
++    file(COPY ${ZLIB_INCLUDE_DIR}/../bin/zlibd.dll DESTINATION ${CMAKE_BINARY_DIR})
+ elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
+     message("-- Release build")
+ elseif(CMAKE_BUILD_TYPE STREQUAL "MinSizeRel")
+@@ -61,6 +55,7 @@ else()
+     message("-- Unknown build type") # <---- This is the result, why?
+ endif()
+ 
++add_definitions(-DIMGUI_IMPL_OPENGL_LOADER_GLAD)
+ set(IMGUI_SOURCES
+     "${ENGINE_DEP_DIR}/imgui/imgui.cpp"
+     "${ENGINE_DEP_DIR}/imgui/imgui_demo.cpp"
+@@ -79,49 +74,26 @@ set(SDL_OPENGL_SPEC gles2)
+ set(SDL_OPENGL_VERSION_MAJOR 3)
+ set(SDL_OPENGL_VERSION_MINOR 2)
+ set(SDL_OPENGL_PROFILE core)
+-
+-######## GLAD INCLUDE ##########################################
+-# add_definitions(-DIMGUI_IMPL_OPENGL_LOADER_GLAD)
+-# set(SDL_OPENGL_LIB_NAME glad_${SDL_OPENGL_SPEC}_${SDL_OPENGL_PROFILE}_${SDL_OPENGL_VERSION_MAJOR}${SDL_OPENGL_VERSION_MINOR})
+-# add_subdirectory("${GLAD_DIR}/cmake" "${CMAKE_BINARY_DIR}/glad_build")
+-# glad_add_library(${SDL_OPENGL_LIB_NAME} STATIC API ${SDL_OPENGL_SPEC}:${SDL_OPENGL_PROFILE}=${SDL_OPENGL_VERSION_MAJOR}.${SDL_OPENGL_VERSION_MINOR})
+-################################################################
++set(SDL_OPENGL_LIB_NAME glad_${SDL_OPENGL_SPEC}_${SDL_OPENGL_PROFILE}_${SDL_OPENGL_VERSION_MAJOR}${SDL_OPENGL_VERSION_MINOR})
++add_subdirectory("${GLAD_DIR}/cmake" "${CMAKE_BINARY_DIR}/glad_build")
++glad_add_library(${SDL_OPENGL_LIB_NAME} SHARED API ${SDL_OPENGL_SPEC}:${SDL_OPENGL_PROFILE}=${SDL_OPENGL_VERSION_MAJOR}.${SDL_OPENGL_VERSION_MINOR})
+ 
+ add_executable(voxel_world 
+ 	${IMGUI_SOURCES} 
+ 	${ENGINE_SRC_DIR}/main.cpp 
+-	${ENGINE_SRC_DIR}/logging.cpp 
++	${ENGINE_SRC_DIR}/logging.cpp
++	${ENGINE_SRC_DIR}/logging.cpp
+ 	${ENGINE_SRC_DIR}/renderer_context.cpp
+ )
+-find_package(SDL2 REQUIRED CONFIG REQUIRED COMPONENTS SDL2)
+-find_package(SDL2 REQUIRED CONFIG COMPONENTS SDL2main SDL2-static)
+-find_package(SDL2_image REQUIRED)
+-find_package(SDL2_image  REQUIRED CONFIG COMPONENTS SDL2_image-static)
+-target_link_libraries(voxel_world 
+-# ${SDL2_LIBRARIES} 
+-# ${SDL2_LIB_COMPONENTS} 
+-SDL2::SDL2-static 
+-SDL2::SDL2main 
+-SDL2_image::SDL2_image-static 
+-glm::glm 
+-# ${SDL_OPENGL_LIB_NAME} # if use glad
+-# static linking links libopenvdb.lib which misses some (_dllexport or import) definitions or smth like this
+-# and with emscripten build we use dynamic openvdb. (maybe will write why not static when remember)
+-OpenVDB::openvdb 
+-# "D:/__OpenSource/openvdb_install_MDd_DynamicDebug/lib/openvdb.lib"
+-TBB::tbb 
+-)
+-target_include_directories(voxel_world PRIVATE 
++target_link_libraries(voxel_world OpenVDB::openvdb ${SDL2_LIBRARIES} SDL2_image::SDL2_image glm::glm ${SDL_OPENGL_LIB_NAME})
++target_include_directories(voxel_world PUBLIC 
+ 		    "${ENGINE_SRC_DIR}" 
+-		    "${SDL2_IMAGE_INCLUDE_DIR}" 
+-		    "${SDL2_INCLUDE_DIR}/SDL2" 
++                    "${SDL2_INCLUDE_DIR}" 
+ 		    "${OpenVDB_openvdb_INCLUDE_DIR}" 
+                     "${ENGINE_DEP_DIR}/imgui/" 
+                     "${ENGINE_DEP_DIR}/imgui/backends/" 
+ 		    "${GLAD_DIR}/glad/include/"
+-		    "${Boost_INCLUDE_DIR}"
+ )
+-# target_link_options(voxel_world /NODEFAULTLIB)
+ IF ( CMAKE_EXPORT_COMPILE_COMMANDS )
+ 	execute_process(
+ 	   COMMAND ${CMAKE_COMMAND} -E create_symlink
+@@ -133,6 +105,6 @@ set(CPACK_PROJECT_NAME ${PROJECT_NAME})
+ set(CPACK_PROJECT_VERSION ${PROJECT_VERSION})
+ include(CPack)
+ 
+-# MY_PRINT_ALL_VARIABLES()
++MY_PRINT_ALL_VARIABLES()
+ 
+ # TODO: empscripten build to js for web thor jam
+diff --git a/CMakePresets.json b/CMakePresets.json
+index 54f041d..ca13f67 100644
+--- a/CMakePresets.json
++++ b/CMakePresets.json
+@@ -3,6 +3,7 @@
+     "configurePresets": [
+         {
+             "name": "windows-base",
++            "description": "Target Windows with the Visual Studio development environment.",
+             "generator": "Ninja",
+             "binaryDir": "${sourceDir}/build/${presetName}",
+             "installDir": "${sourceDir}/install/${presetName}",
+@@ -19,8 +20,7 @@
+                 "SDL2_image_DIR": "C:/Program Files (x86)/SDL2_image-2.8.2",
+                 "OpenVDB_DIR": "D:/__OpenSource/openvdb_install/lib/cmake/OpenVDB",
+                 "CMAKE_EXPORT_COMPILE_COMMANDS": "1",
+-                "GLAD_DIR": "D:/__OpenSource/glad/",
+-                "CMAKE_CXX_FLAGS": "/bigobj"
++                "GLAD_DIR": "D:/__OpenSource/glad/"
+             },
+             "condition": {
+                 "type": "equals",
+@@ -28,148 +28,6 @@
+                 "rhs": "Windows"
+             }
+         },
+-        {
+-            "name": "windows-clang-ninja",
+-            "generator": "Ninja",
+-            "binaryDir": "${sourceDir}/build/${presetName}",
+-            "installDir": "${sourceDir}/install/${presetName}",
+-            "cacheVariables": {
+-                "CMAKE_C_COMPILER": "clang",
+-                "CMAKE_CXX_COMPILER": "clang",
+-                "PKG_CONFIG_EXECUTABLE": "D:/__OpenSource/vcpkg/vcpkg.exe",
+-                "BOOST_ROOT": "D:/__OpenSource/boost_install_clang",
+-                "TBB_ROOT": "C:/Program Files (x86)/Intel/oneAPI/tbb/latest",
+-                "BLOSC_ROOT": "D:/__OpenSource/c-blosc_install",
+-                "ZLIB_ROOT": "D:/__OpenSource/zlib131/zlib131_install_x64",
+-                "glm_DIR": "D:/__OpenSource/vcpkg/packages/glm_x86-windows/share/glm/",
+-                "OpenVDB_DIR": "D:/__OpenSource/openvdb_install_MDd_DynamicDebug/lib/cmake/OpenVDB",
+-                "CMAKE_EXPORT_COMPILE_COMMANDS": "1",
+-                "GLAD_DIR": "D:/__OpenSource/glad/",
+-                "EMSDK_DIR": "D:/__OpenSource/emsdk",
+-                "Boost_COMPILER": "clangw19"
+-            },
+-            "condition": {
+-                "type": "equals",
+-                "lhs": "${hostSystemName}",
+-                "rhs": "Windows"
+-            }
+-        },
+-        {
+-            "name": "windows-emcc-ninja",
+-            "generator": "Ninja",
+-            "binaryDir": "${sourceDir}/build/${presetName}",
+-            "installDir": "${sourceDir}/install/${presetName}",
+-            "cacheVariables": {
+-                "CMAKE_C_COMPILER": "D:/__OpenSource/emsdk/upstream/emscripten/emcc.bat",
+-                "CMAKE_CXX_COMPILER": "D:/__OpenSource/emsdk/upstream/emscripten/em++.bat",
+-                "CMAKE_CXX_FLAGS": "-sUSE_SDL=2",
+-                "PKG_CONFIG_EXECUTABLE": "D:/__OpenSource/vcpkg/vcpkg.exe",
+-                "BOOST_ROOT": "D:/__OpenSource/boost_install_clang",
+-                "TBB_ROOT": "C:/Program Files (x86)/Intel/oneAPI/tbb/latest",
+-                "BLOSC_ROOT": "D:/__OpenSource/c-blosc_install",
+-                "ZLIB_ROOT": "D:/__OpenSource/zlib131/zlib131_install_x64",
+-                "glm_DIR": "D:/__OpenSource/vcpkg/packages/glm_x86-windows/share/glm/",
+-                "OpenVDB_DIR": "D:/__OpenSource/openvdb_install_MDd_DynamicDebug/lib/cmake/OpenVDB",
+-                "CMAKE_EXPORT_COMPILE_COMMANDS": "1",
+-                "GLAD_DIR": "D:/__OpenSource/glad/",
+-                "EMSDK_DIR": "D:/__OpenSource/emsdk",
+-                "Boost_COMPILER": "clangw19",
+-                "CMAKE_TRY_COMPILE_TARGET_TYPE": "STATIC_LIBRARY"
+-            },
+-            "condition": {
+-                "type": "equals",
+-                "lhs": "${hostSystemName}",
+-                "rhs": "Windows"
+-            }
+-        },
+-        {
+-            "name": "windows-clang-base",
+-            "binaryDir": "${sourceDir}/build/${presetName}",
+-            "installDir": "${sourceDir}/install/${presetName}",
+-            "cacheVariables": {
+-                "CMAKE_C_COMPILER": "clang",
+-                "CMAKE_CXX_COMPILER": "clang",
+-                "PKG_CONFIG_EXECUTABLE": "D:/__OpenSource/vcpkg/vcpkg.exe",
+-                "BOOST_ROOT": "D:/__OpenSource/boost_install_clang",
+-                "TBB_ROOT": "C:/Program Files (x86)/Intel/oneAPI/tbb/latest",
+-                "BLOSC_ROOT": "D:/__OpenSource/c-blosc_install",
+-                "ZLIB_ROOT": "D:/__OpenSource/zlib131/zlib131_install_x64",
+-                "glm_DIR": "D:/__OpenSource/vcpkg/packages/glm_x86-windows/share/glm/",
+-                "OpenVDB_DIR": "D:/__OpenSource/openvdb_install_MDd_DynamicDebug/lib/cmake/OpenVDB",
+-                "CMAKE_EXPORT_COMPILE_COMMANDS": "1",
+-                "GLAD_DIR": "D:/__OpenSource/glad/",
+-                "EMSDK_DIR": "D:/__OpenSource/emsdk",
+-                "Boost_COMPILER": "clangw19"
+-            },
+-            "condition": {
+-                "type": "equals",
+-                "lhs": "${hostSystemName}",
+-                "rhs": "Windows"
+-            }
+-        },
+-        {
+-            "name": "x64-debug-clang-ninja",
+-            "displayName": "x64 Debug",
+-            "inherits": "windows-clang-ninja",
+-            "architecture": {
+-                "value": "x64",
+-                "strategy": "external"
+-            },
+-            "cacheVariables": {
+-                "CMAKE_BUILD_TYPE": "Debug"
+-            }
+-        },
+-        {
+-            "name": "x86-debug-clang-ninja",
+-            "displayName": "x86 Debug",
+-            "inherits": "windows-clang-ninja",
+-            "architecture": {
+-                "value": "x86",
+-                "strategy": "external"
+-            },
+-            "cacheVariables": {
+-                "CMAKE_BUILD_TYPE": "Debug",
+-                "CMAKE_C_COMPILER": "clang",
+-                "CMAKE_CXX_COMPILER": "clang",
+-                "CMAKE_CXX_FLAGS": "-static -fms-runtime-lib=static_dbg",
+-                "CMAKE_CXX_FLAGS_DEBUG": "-static -fms-runtime-lib=static_dbg",
+-
+-                "SDL2_DIR": "D:/__OpenSource/SDL2_install_x86/cmake",
+-                "SDL2_image_DIR": "D:/__OpenSource/SDL_image_install_x86/cmake",
+-                "ZLIB_ROOT": "D:/__OpenSource/zlib131/zlib131_install_x86",
+-                "OpenVDB_DIR": "D:/__OpenSource/openvdb_install_x86/lib/cmake/OpenVDB",
+-                "BLOSC_ROOT": "D:/__OpenSource/c-blosc_install_x86",
+-                "TBB_ROOT": "D:/__OpenSource/tbb_install_x86",
+-                "_SILENCE_CXX23_DENORM_DEPRECATION_WARNING": "True",
+-                "CMAKE_TRY_COMPILE_TARGET_TYPE": "STATIC_LIBRARY"
+-            }
+-        },
+-        {
+-            "name": "x86-emcc-ninja-debug",
+-            "displayName": "x86 Debug",
+-            "inherits": "windows-emcc-ninja",
+-            "architecture": {
+-                "value": "x86",
+-                "strategy": "external"
+-            },
+-            "cacheVariables": {
+-                "CMAKE_BUILD_TYPE": "Debug",
+-                "SDL2_DIR": "D:/__OpenSource/SDL2_install_x86/cmake",
+-                "SDL2_image_DIR": "C:/Program Files (x86)/SDL2_image-2.8.2"
+-            }
+-        },
+-        {
+-            "name": "x64-emcc-ninja-debug",
+-            "displayName": "x64 Debug",
+-            "inherits": "windows-emcc-ninja",
+-            "architecture": {
+-                "value": "x64",
+-                "strategy": "external"
+-            },
+-            "cacheVariables": {
+-                "CMAKE_BUILD_TYPE": "Debug"
+-            }
+-        },
+         {
+             "name": "x64-debug",
+             "displayName": "x64 Debug",
+diff --git a/TODO_emscripten.md b/TODO_emscripten.md
+deleted file mode 100644
+index bd6032b..0000000
+--- a/TODO_emscripten.md
++++ /dev/null
+@@ -1,43 +0,0 @@
+-------- DONE ---------------------------------------------------------
+-			- 32 bit preset fails configuration `cmake --preset x64-emcc-clang-ninja` with 
+-				    FAILED: cmTC_7be05.exe
+-			    C:\WINDOWS\system32\cmd.exe /C "cd . && D:\__OpenSource\emsdk\upstream\emscripten\emcc.bat   CMakeFiles/cmTC_7be05.dir/testCCompiler.c.obj -o cmTC_7be05.exe -Wl,--out-implib,libcmTC_7be05.dll.a -Wl,--major-image-version,0,--minor-image-version,0  -lkernel32 -luser32 -lgdi32 -lwinspool -lshell32 -lole32 -loleaut32 -luuid -lcomdlg32 -ladvapi32 && cd ."
+-			    wasm-ld: error: unknown argument: --out-implib
+-			    wasm-ld: error: unknown argument: --major-image-version
+-			    wasm-ld: error: unknown argument: --minor-image-version
+-			    wasm-ld: error: cannot open libcmTC_7be05.dll.a: no such file or directory
+-			    wasm-ld: error: cannot open 0: no such file or directory
+-			    wasm-ld: error: cannot open 0: no such file or directory
+-			    wasm-ld: error: unable to find library -lkernel32
+-			    wasm-ld: error: unable to find library -luser32
+-			    wasm-ld: error: unable to find library -lgdi32
+-			    wasm-ld: error: unable to find library -lwinspool
+-			    wasm-ld: error: unable to find library -lshell32
+-			    wasm-ld: error: unable to find library -lole32
+-			    wasm-ld: error: unable to find library -loleaut32
+-			    wasm-ld: error: unable to find library -lcomdlg32
+-			    wasm-ld: error: unable to find library -ladvapi32
+-			
+-			- https://discourse.cmake.org/t/find-package-error-the-following-configuration-files-were-considered-but-not-accepted-what-does-it-mean/5003
+-			
+-			    Stefan Lang
+-			    Feb 2022
+-			    I’m trying to build some open source libs on Windows using cmake-gui and running into several cmake errors where find_package does find a {package}-config.cmake file, but fails to accept it! I’m at a loss what to do now. Here’s an example of the error message:
+-			    
+-			    CMake Error at CMakeLists.txt:44 (find_package):
+-			    Could not find a configuration file for package “freetype” that is
+-			    compatible with requested version “”.
+-			
+-			  The following configuration files were considered but not accepted:
+-			  
+-			  D:/OpenCascade/3rdparty/freetype2/lib/cmake/freetype/freetype-config.cmake, version: 2.11.1 (64bit)
+-			  
+-			  The problem is that I have no idea why this file is not accepted, and therefore I’m stuck. How can I proceed? How can I resolve this error?
+-			  Thanks for the hint. I checked some things to make sure that everything is set to x64, but then I noticed that the emscripten target is set to x86! Some more googling indicated that there appears to be no 64 bit compiler for emscripten (web assembly). That means I’ll have to rebuild everything for x86… :frowning:
+-			  
+-			  Now I’m wondering how to set the build target to x86: cmake-gui does not show any build target, so I assume the default is x64. I guess I’ll find out eventually, but if someone reads this within the next half hour I would appreciate a tip.
+-
+-			- LOG_ERROR macro expansion broken for emcc because apparentely it uses old std standard. TODO: refactor
+-
+-------- $DONE ---------------------------------------------------------
+-
+diff --git a/src/logging.cpp b/src/logging.cpp
+index b66dfd0..72e0fb1 100644
+--- a/src/logging.cpp
++++ b/src/logging.cpp
+@@ -24,10 +24,3 @@ void log(int severity, const char *function,
+   va_end(argv);
+   fprintf(stderr, fmt_loc, function, file, line);
+ };
+-void FLOG_ERROR(const char *fmt, const int argc...) {
+-  std::va_list args;
+-  va_start(args, argc);
+-  log(SEVERITY_LEVEL::ERROR, __FUNCTION__, __FILE__, __LINE__, fmt, argc, args);
+-  va_end(args);
+-}
+-
+diff --git a/src/logging.h b/src/logging.h
+index 7ee6af5..9ff0e8c 100644
+--- a/src/logging.h
++++ b/src/logging.h
+@@ -1,20 +1,38 @@
+ #ifndef VW_LOGGING
+ #define VW_LOGGING
+ 
+-#include <cstdarg>
+ enum SEVERITY_LEVEL {
+         DEBUG,
+         INFO,
+         ERROR
+ };
++
++#define FLOG_ERROR(fmt, argc, ...) \
++FLOG(ERROR, fmt, argc, __VA_ARGS__);
++
++#define LOG_ERROR(fmt) \
++LOG(ERROR,  fmt);
++
++#define FLOG_INFO(fmt, argc, ...) \
++FLOG(INFO, fmt, argc, __VA_ARGS__);
++
++#define LOG_INFO(fmt) \
++LOG(INFO,  fmt);
++
++#define FLOG_DEBUG(fmt, argc, ...) \
++FLOG(DEBUG, fmt, argc, __VA_ARGS__);
++
++#define LOG_DEBUG(fmt) \
++LOG(DEBUG,  fmt);
++
++#define LOG(severity, fmt) \
++FLOG(severity, fmt, 0);\
++
++#define FLOG(severity, fmt, argc, ...) \
++log(severity,  __FUNCTION__, __FILE__, __LINE__, fmt, argc, __VA_ARGS__);
++
+ void log(int severity, const char *function,
+-         const char *file, int line, const char *fmt, int argc, va_list);
+-void FLOG_ERROR(const char *fmt, const int argc...);
+-void LOG_ERROR( const char* fmt);
+-void FLOG_INFO(const char* fmt, const int argc, ...);
+-void LOG_INFO(const char* fmt);
+-void FLOG_DEBUG(const char* fmt, const int argc, ...);
+-void LOG_DEBUG( const char* fmt);
++         const char *file, int line, const char *fmt, int argc, ...);
+ 
+ 
+ #endif
+diff --git a/src/main.cpp b/src/main.cpp
+index 11299c5..aed7054 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -1,5 +1,4 @@
+-#include <glad/gl.h>
+-#include <SDL.h>
++#include "SDL.h"
+ #include "SDL_image.h"
+ #include "logging.h"
+ #include "grids.h"
+diff --git a/src/renderer_context.cpp b/src/renderer_context.cpp
+index 63162ab..8f3f7c8 100644
+--- a/src/renderer_context.cpp
++++ b/src/renderer_context.cpp
+@@ -1,8 +1,9 @@
++#include "renderer_context.h"
+ #include "logging.h"
+ #include "settings_global.h"
+-#include <glad/gl.h>
+-// #include <SDL_image.h>
++#include <SDL_image.h>
+ #include <SDL.h>
++#include <glad/gl.h>
+ 
+ namespace VW_RendererContext {
+ 
+diff --git a/src/renderer_context.h b/src/renderer_context.h
+index 66cf0ef..b199652 100644
+--- a/src/renderer_context.h
++++ b/src/renderer_context.h
+@@ -1,6 +1,8 @@
+ #ifndef SW_RENDERER_CONTEXT
+ #define SW_RENDERER_CONTEXT
+ 
++#include "SDL.h"
++
+ namespace RendererContext {
+ 	void init();
+ 	void clear_context();

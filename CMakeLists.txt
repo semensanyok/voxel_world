@@ -45,6 +45,11 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     file(COPY ${_OPENVDB_ROOT}/bin/openvdb.dll DESTINATION ${CMAKE_BINARY_DIR})
     file(COPY ${Blosc_INCLUDE_DIR}/../bin/blosc.dll DESTINATION ${CMAKE_BINARY_DIR})
     file(COPY ${ZLIB_INCLUDE_DIR}/../bin/zlibd.dll DESTINATION ${CMAKE_BINARY_DIR})
+    file(GLOB SDL2_IMAGE_DLLS
+      "${SDL2_image_DIR}/../bin/*.dll"
+    )
+message("copying ${SDL2_IMAGE_DLLS} to target dir")
+    file(COPY ${SDL2_IMAGE_DLLS} DESTINATION ${CMAKE_BINARY_DIR})
 elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
     message("-- Release build")
 elseif(CMAKE_BUILD_TYPE STREQUAL "MinSizeRel")
@@ -105,6 +110,6 @@ set(CPACK_PROJECT_NAME ${PROJECT_NAME})
 set(CPACK_PROJECT_VERSION ${PROJECT_VERSION})
 include(CPack)
 
-MY_PRINT_ALL_VARIABLES()
+# MY_PRINT_ALL_VARIABLES()
 
 # TODO: empscripten build to js for web thor jam
