@@ -37,8 +37,10 @@ find_package(glm REQUIRED)
 find_package(OpenVDB REQUIRED)
 find_package(SDL2 REQUIRED)
 find_package(SDL2_image REQUIRED)
+set(FastNoise2_DIR dependencies/FastNoise2)
+add_subdirectory(${FastNoise2_DIR})
 
-# copy to bin dir to save dev time. TODO: remove. package dlls.
+# copy to bin dir to save dev time. TODO: remove. static deps. (branch 'emscripten' has some work)
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     message("-- Debug build")
     file(COPY ${_TBB_ROOT}/bin/tbb12_debug.dll DESTINATION ${CMAKE_BINARY_DIR})
@@ -71,13 +73,13 @@ set(IMGUI_SOURCES
     "${ENGINE_DEP_DIR}/imgui/imgui_tables.cpp"
 )
 
-# set(SDL_OPENGL_SPEC gl)
-# set(SDL_OPENGL_VERSION_MAJOR 4)
-# set(SDL_OPENGL_VERSION_MINOR 6)
-# set(SDL_OPENGL_PROFILE core)
-set(SDL_OPENGL_SPEC gles2)
-set(SDL_OPENGL_VERSION_MAJOR 3)
-set(SDL_OPENGL_VERSION_MINOR 2)
+set(SDL_OPENGL_SPEC gl)
+set(SDL_OPENGL_VERSION_MAJOR 4)
+set(SDL_OPENGL_VERSION_MINOR 6)
+set(SDL_OPENGL_PROFILE core)
+# set(SDL_OPENGL_SPEC gles2)
+# set(SDL_OPENGL_VERSION_MAJOR 3)
+# set(SDL_OPENGL_VERSION_MINOR 2)
 set(SDL_OPENGL_PROFILE core)
 set(SDL_OPENGL_LIB_NAME glad_${SDL_OPENGL_SPEC}_${SDL_OPENGL_PROFILE}_${SDL_OPENGL_VERSION_MAJOR}${SDL_OPENGL_VERSION_MINOR})
 add_subdirectory("${GLAD_DIR}/cmake" "${CMAKE_BINARY_DIR}/glad_build")
@@ -90,7 +92,7 @@ add_executable(voxel_world
 	${ENGINE_SRC_DIR}/logging.cpp
 	${ENGINE_SRC_DIR}/renderer_context.cpp
 )
-target_link_libraries(voxel_world OpenVDB::openvdb ${SDL2_LIBRARIES} SDL2_image::SDL2_image glm::glm ${SDL_OPENGL_LIB_NAME})
+target_link_libraries(voxel_world OpenVDB::openvdb ${SDL2_LIBRARIES} SDL2_image::SDL2_image glm::glm ${SDL_OPENGL_LIB_NAME} FastNoise)
 target_include_directories(voxel_world PUBLIC 
 		    "${ENGINE_SRC_DIR}" 
                     "${SDL2_INCLUDE_DIR}" 
@@ -110,6 +112,5 @@ set(CPACK_PROJECT_NAME ${PROJECT_NAME})
 set(CPACK_PROJECT_VERSION ${PROJECT_VERSION})
 include(CPack)
 
-# MY_PRINT_ALL_VARIABLES()
+MY_PRINT_ALL_VARIABLES()
 
-# TODO: empscripten build to js for web thor jam

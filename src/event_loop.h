@@ -21,7 +21,7 @@
         if (Gui::enable) {
           ImGui_ImplSDL2_ProcessEvent(&e);
         }
-        systems_manager->controller->ProcessEvent(&e);
+        // systems_manager->controller->ProcessEvent(&e);
       }
       systems_manager->renderer->Render(systems_manager->camera);
       systems_manager->Update();
