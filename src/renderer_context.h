@@ -3,9 +3,9 @@
 
 #include "SDL.h"
 
-namespace RendererContext {
+namespace VW_RendererContext {
 	void init();
-	void clear_context();
+	void clear();
 };
 
 #endif

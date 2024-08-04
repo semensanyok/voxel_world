@@ -33,6 +33,7 @@ enable_testing()
 list(APPEND CMAKE_MODULE_PATH 
 	"${OpenVDB_DIR}")
 
+find_package(Vulkan REQUIRED)
 find_package(glm REQUIRED)
 find_package(OpenVDB REQUIRED)
 find_package(SDL2 REQUIRED)
@@ -62,28 +63,14 @@ else()
     message("-- Unknown build type") # <---- This is the result, why?
 endif()
 
-add_definitions(-DIMGUI_IMPL_OPENGL_LOADER_GLAD)
 set(IMGUI_SOURCES
     "${ENGINE_DEP_DIR}/imgui/imgui.cpp"
     "${ENGINE_DEP_DIR}/imgui/imgui_demo.cpp"
     "${ENGINE_DEP_DIR}/imgui/imgui_draw.cpp"
     "${ENGINE_DEP_DIR}/imgui/imgui_widgets.cpp"
-    "${ENGINE_DEP_DIR}/imgui/backends/imgui_impl_opengl3.cpp"
-    "${ENGINE_DEP_DIR}/imgui/backends/imgui_impl_sdl2.cpp"
+    "${ENGINE_DEP_DIR}/imgui/backends/imgui_impl_vulkan.cpp"
     "${ENGINE_DEP_DIR}/imgui/imgui_tables.cpp"
 )
-
-set(SDL_OPENGL_SPEC gl)
-set(SDL_OPENGL_VERSION_MAJOR 4)
-set(SDL_OPENGL_VERSION_MINOR 6)
-set(SDL_OPENGL_PROFILE core)
-# set(SDL_OPENGL_SPEC gles2)
-# set(SDL_OPENGL_VERSION_MAJOR 3)
-# set(SDL_OPENGL_VERSION_MINOR 2)
-set(SDL_OPENGL_PROFILE core)
-set(SDL_OPENGL_LIB_NAME glad_${SDL_OPENGL_SPEC}_${SDL_OPENGL_PROFILE}_${SDL_OPENGL_VERSION_MAJOR}${SDL_OPENGL_VERSION_MINOR})
-add_subdirectory("${GLAD_DIR}/cmake" "${CMAKE_BINARY_DIR}/glad_build")
-glad_add_library(${SDL_OPENGL_LIB_NAME} SHARED API ${SDL_OPENGL_SPEC}:${SDL_OPENGL_PROFILE}=${SDL_OPENGL_VERSION_MAJOR}.${SDL_OPENGL_VERSION_MINOR})
 
 add_executable(voxel_world 
 	${IMGUI_SOURCES} 
@@ -92,14 +79,13 @@ add_executable(voxel_world
 	${ENGINE_SRC_DIR}/logging.cpp
 	${ENGINE_SRC_DIR}/renderer_context.cpp
 )
-target_link_libraries(voxel_world OpenVDB::openvdb ${SDL2_LIBRARIES} SDL2_image::SDL2_image glm::glm ${SDL_OPENGL_LIB_NAME} FastNoise)
+target_link_libraries(voxel_world OpenVDB::openvdb ${SDL2_LIBRARIES} SDL2_image::SDL2_image glm::glm FastNoise Vulkan::Vulkan)
 target_include_directories(voxel_world PUBLIC 
 		    "${ENGINE_SRC_DIR}" 
                     "${SDL2_INCLUDE_DIR}" 
 		    "${OpenVDB_openvdb_INCLUDE_DIR}" 
                     "${ENGINE_DEP_DIR}/imgui/" 
                     "${ENGINE_DEP_DIR}/imgui/backends/" 
-		    "${GLAD_DIR}/glad/include/"
 )
 IF ( CMAKE_EXPORT_COMPILE_COMMANDS )
 	execute_process(
@@ -112,5 +98,5 @@ set(CPACK_PROJECT_NAME ${PROJECT_NAME})
 set(CPACK_PROJECT_VERSION ${PROJECT_VERSION})
 include(CPack)
 
-MY_PRINT_ALL_VARIABLES()
+# MY_PRINT_ALL_VARIABLES()
 

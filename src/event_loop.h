@@ -1,4 +1,5 @@
-
+#ifndef VW_EVENT_LOOP_H
+#define VW_EVENT_LOOP_H
   void Init() {
     // create systems
     SystemsManager::GetInstance()->InitSystems();
@@ -32,3 +33,5 @@
     delete systems_manager;
     return 0;
   }
+
+#endif
