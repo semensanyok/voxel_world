@@ -1,4 +1,9 @@
 {
     "C_Cpp.default.compilerPath": "cl.exe",
-    "cmake.configureOnOpen": true
+    "cmake.configureOnOpen": true,
+    "files.associations": {
+        "iostream": "cpp",
+        "stdexcept": "cpp",
+        "ios": "cpp"
+    }
 }

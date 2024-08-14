@@ -1,12 +1,12 @@
-#include "logging.h"
 #include "grids.h"
-#include <openvdb/tools/VolumeToMesh.h>
 #include "renderer_context.h"
+#include <openvdb/tools/VolumeToMesh.h>
 
 int main(int argc, char *argv[]) {
   auto gr = VW::NoiseGrid::createNoiseGrid();
 
-  VW_RendererContext::init();
+  auto rc = RendererContext();
+  rc.init();
 
   while (true) {
     SDL_Event e;
@@ -16,6 +16,7 @@ int main(int argc, char *argv[]) {
       }
     }
   }
+  rc.clear();
 
   return 0;
 }
