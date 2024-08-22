@@ -5,6 +5,7 @@
 #include <SDL_stdinc.h>
 #include <SDL_vulkan.h>
 #include <algorithm>
+#include <fstream>
 #include <map>
 #include <optional>
 #include <set>
@@ -38,6 +39,14 @@ private:
   VkSurfaceKHR surface;
   VkQueue presentQueue;
   VkSwapchainKHR swapChain;
+  std::vector<VkImage> swapChainImages;
+  VkFormat swapChainImageFormat;
+  VkExtent2D swapChainExtent;
+  std::vector<VkImageView> swapChainImageViews;
+
+  VkRenderPass renderPass;
+  VkPipelineLayout pipelineLayout;
+  VkPipeline graphicsPipeline;
 
   VkDebugUtilsMessengerEXT debugMessenger;
 
@@ -92,6 +101,10 @@ private:
       const std::vector<VkPresentModeKHR> &availablePresentModes);
   VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR &capabilities);
   void createSwapChain();
+  void createImageViews();
+  void createGraphicsPipeline();
+  VkShaderModule createShaderModule(const std::vector<char> &code);
+  void createRenderPass();
 };
 
 #endif

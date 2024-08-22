@@ -98,5 +98,35 @@ set(CPACK_PROJECT_NAME ${PROJECT_NAME})
 set(CPACK_PROJECT_VERSION ${PROJECT_VERSION})
 include(CPack)
 
+set(VULKAN_SPV_DIR ${CMAKE_BINARY_DIR}/shaders/spv/)
+
+file(GLOB shaderfiles src/shaders/*)
+
+foreach(filename ${shaderfiles})
+get_filename_component(inext ${filename} EXT)
+string(REPLACE "." "" inexttrim ${inext})
+get_filename_component(inbase ${filename} NAME_WE)
+set(outfilename ${inbase}_${inexttrim}.spv)
+set(outfilename_full ${VULKAN_SPV_DIR}/${inbase}_${inexttrim}.spv)
+message("outfilename=${outfilename}")
+
+add_custom_target(
+dummy_target_${outfilename} ALL
+DEPENDS ${outfilename_full}
+)
+add_custom_command(
+OUTPUT ${outfilename_full}
+COMMENT "compile shader ${filename}"
+WORKING_DIRECTORY ${GTK_UI_PATH}
+COMMAND ${VULKAN_BIN_DIR}/glslc.exe
+ARGS
+${filename}
+-o
+${outfilename_full}
+DEPENDS ${filename}
+)
+endforeach()
+
+
 # MY_PRINT_ALL_VARIABLES()
 

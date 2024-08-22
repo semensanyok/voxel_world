@@ -19,7 +19,8 @@
                 "SDL2_DIR": "C:/Program Files (x86)/SDL2/cmake",
                 "SDL2_image_DIR": "D:/__OpenSource/SDL_image_install_x64/cmake",
                 "OpenVDB_DIR": "D:/__OpenSource/openvdb_install/lib/cmake/OpenVDB",
-                "CMAKE_EXPORT_COMPILE_COMMANDS": "1"
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "1",
+                "VULKAN_BIN_DIR": "C:/VulkanSDK/1.3.290.0/Bin" 
             },
             "condition": {
                 "type": "equals",
