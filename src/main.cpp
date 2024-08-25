@@ -1,9 +1,11 @@
-#include "grids.h"
 #include "renderer_context.h"
+#include "vw_utils.h"
+#include <algorithm>
 #include <openvdb/tools/VolumeToMesh.h>
+#include <string>
 
 int main(int argc, char *argv[]) {
-  auto gr = VW::NoiseGrid::createNoiseGrid();
+  auto args_vw = parse_arg(argc, argv);
 
   auto rc = RendererContext();
   rc.init();
@@ -15,8 +17,8 @@ int main(int argc, char *argv[]) {
         break;
       }
     }
+    rc.drawFrame();
   }
   rc.clear();
-
   return 0;
 }

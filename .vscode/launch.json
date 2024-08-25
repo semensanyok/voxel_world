@@ -12,6 +12,8 @@
             // Change the arguments below for the project you want to test with.
             // To run the project instead of editing it, remove the "--editor" argument.
             // "args": [
+            //     "--shader_spv_dir", 
+            //     "./build/x64-debug/shaders/"
             // ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",

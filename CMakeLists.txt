@@ -17,7 +17,7 @@ project(voxel_world VERSION 0.1.0 LANGUAGES C CXX)
 #       add_compile_options(/std:c++latest)
 #       add_compile_options(-std:c++23)
 #   '''
-set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD 20)
 
 # mysterious advice given by MSVC compiler. somehow windows specific.
 add_compile_options(/bigobj)
@@ -76,16 +76,17 @@ add_executable(voxel_world
 	${IMGUI_SOURCES} 
 	${ENGINE_SRC_DIR}/main.cpp 
 	${ENGINE_SRC_DIR}/logging.cpp
-	${ENGINE_SRC_DIR}/logging.cpp
 	${ENGINE_SRC_DIR}/renderer_context.cpp
+	${ENGINE_SRC_DIR}/vw_utils.cpp
+	${ENGINE_SRC_DIR}/grids.cpp
 )
 target_link_libraries(voxel_world OpenVDB::openvdb ${SDL2_LIBRARIES} SDL2_image::SDL2_image glm::glm FastNoise Vulkan::Vulkan)
 target_include_directories(voxel_world PUBLIC 
 		    "${ENGINE_SRC_DIR}" 
-                    "${SDL2_INCLUDE_DIR}" 
+        "${SDL2_INCLUDE_DIR}" 
 		    "${OpenVDB_openvdb_INCLUDE_DIR}" 
-                    "${ENGINE_DEP_DIR}/imgui/" 
-                    "${ENGINE_DEP_DIR}/imgui/backends/" 
+        "${ENGINE_DEP_DIR}/imgui/" 
+        "${ENGINE_DEP_DIR}/imgui/backends/" 
 )
 IF ( CMAKE_EXPORT_COMPILE_COMMANDS )
 	execute_process(
@@ -99,6 +100,7 @@ set(CPACK_PROJECT_VERSION ${PROJECT_VERSION})
 include(CPack)
 
 set(VULKAN_SPV_DIR ${CMAKE_BINARY_DIR}/shaders/spv/)
+target_compile_definitions(voxel_world PUBLIC VULKAN_SPV_DIR=${VULKAN_SPV_DIR})
 
 file(GLOB shaderfiles src/shaders/*)
 
@@ -126,7 +128,6 @@ ${outfilename_full}
 DEPENDS ${filename}
 )
 endforeach()
-
 
 # MY_PRINT_ALL_VARIABLES()
 
