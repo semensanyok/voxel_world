@@ -1,6 +1,7 @@
 #ifndef SW_RENDERER_CONTEXT
 #define SW_RENDERER_CONTEXT
 
+#include "settings_global.h"
 #include "vw_utils.h"
 #include <SDL.h>
 #include <SDL_stdinc.h>
@@ -66,6 +67,9 @@ private:
   std::vector<VkSemaphore> renderFinishedSemaphores;
   std::vector<VkFence> inFlightFences;
 
+  bool framebufferResized = false;
+  bool windowMinimizedOrHidden = false;
+
 #ifdef NDEBUG
   const bool enableValidationLayers = false;
 #else
@@ -77,11 +81,20 @@ private:
       VK_KHR_SWAPCHAIN_EXTENSION_NAME};
 
 public:
+  int scr_width = GameSettings::SCR_WIDTH_INIT;
+  int scr_height = GameSettings::SCR_HEIGHT_INIT;
   void init();
   void clear();
   void drawFrame();
+  void recreateSwapChain();
+  int windowCallback(SDL_Event *e);
 
 private:
+  void recreateWindow();
+  void resizeWindow(SDL_Event *e);
+  void minimizedWindow();
+  void hiddenWindow();
+  void restoredWindow();
   static VKAPI_ATTR VkBool32 VKAPI_CALL
   debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
                 VkDebugUtilsMessageTypeFlagsEXT messageType,
@@ -97,6 +110,7 @@ private:
   void
   setupDebugCreateInfo(VkDebugUtilsMessengerCreateInfoEXT &debugCreateInfo);
 
+  void cleanupSwapChain();
   QueueFamilyIndices
   findQueueFamilies(VkPhysicalDevice &physical_device_candidate);
   bool isDeviceSuitable(VkPhysicalDevice &device);

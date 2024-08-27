@@ -1,5 +1,6 @@
 #include "renderer_context.h"
 #include "settings_global.h"
+#include <SDL_events.h>
 #include <SDL_video.h>
 #include <algorithm>
 #include <filesystem>
@@ -11,12 +12,24 @@
 void RendererContext::drawFrame() {
   vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE,
                   UINT64_MAX);
+  while (windowMinimizedOrHidden || (scr_width == 0 || scr_height == 0)) {
+    SDL_WaitEvent(NULL);
+  }
+  uint32_t imageIndex;
+  VkResult result = vkAcquireNextImageKHR(
+      device, swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame],
+      VK_NULL_HANDLE, &imageIndex);
+
+  if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+    recreateSwapChain();
+    return;
+  } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+    throw std::runtime_error("failed to acquire swap chain image!");
+  }
+
+  // Only reset the fence if we are submitting work
   vkResetFences(device, 1, &inFlightFences[currentFrame]);
 
-  uint32_t imageIndex;
-  vkAcquireNextImageKHR(device, swapChain, UINT64_MAX,
-                        imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE,
-                        &imageIndex);
   vkResetCommandBuffer(commandBuffers[currentFrame], 0);
   recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
 
@@ -56,23 +69,32 @@ void RendererContext::drawFrame() {
 
   presentInfo.pResults = nullptr; // Optional
 
-  vkQueuePresentKHR(presentQueue, &presentInfo);
+  result = vkQueuePresentKHR(presentQueue, &presentInfo);
+
+  if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR ||
+      framebufferResized) {
+    framebufferResized = false;
+    recreateSwapChain();
+  } else if (result != VK_SUCCESS) {
+    throw std::runtime_error("failed to present swap chain image!");
+  }
 
   currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 }
 
 void RendererContext::init() {
   SDL_Init(SDL_INIT_VIDEO);
-  SDL_WindowFlags window_flags =
-      (SDL_WindowFlags)(SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE |
-                        SDL_WINDOW_ALLOW_HIGHDPI // SDL_WINDOW_OPENGL
-      );
-
-  window = SDL_CreateWindow("voxel_world", SDL_WINDOWPOS_CENTERED,
-                            SDL_WINDOWPOS_CENTERED, GameSettings::SCR_WIDTH,
-                            GameSettings::SCR_HEIGHT, window_flags);
-  if (!window)
-    LOG_ERROR("Couldn't create window");
+  // SDL_WindowFlags window_flags =
+  //     (SDL_WindowFlags)(SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE |
+  //                       SDL_WINDOW_ALLOW_HIGHDPI // SDL_WINDOW_OPENGL
+  //     );
+  //
+  // window = SDL_CreateWindow("voxel_world", SDL_WINDOWPOS_CENTERED,
+  //                           SDL_WINDOWPOS_CENTERED, GameSettings::SCR_WIDTH,
+  //                           GameSettings::SCR_HEIGHT, window_flags);
+  // if (!window)
+  //   LOG_ERROR("Couldn't create window");
+  recreateWindow();
 
   createInstance();
   createSurface();
@@ -87,28 +109,79 @@ void RendererContext::init() {
   createCommandBuffer();
   createSyncObjects();
 }
-void RendererContext::clear() {
+void RendererContext::recreateWindow() {
+  SDL_WindowFlags window_flags =
+      (SDL_WindowFlags)(SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE |
+                        SDL_WINDOW_ALLOW_HIGHDPI // SDL_WINDOW_OPENGL
+      );
+
+  window = SDL_CreateWindow("voxel_world", SDL_WINDOWPOS_CENTERED,
+                            SDL_WINDOWPOS_CENTERED, scr_width, scr_height,
+                            window_flags);
+  if (!window)
+    LOG_ERROR("Couldn't create window");
+}
+int RendererContext::windowCallback(SDL_Event *e) {
+  if (e->window.event == SDL_WINDOWEVENT_SIZE_CHANGED ||
+      e->window.event == SDL_WINDOWEVENT_RESIZED) {
+    resizeWindow(e);
+  } else if (e->window.event == SDL_WINDOWEVENT_MINIMIZED) {
+    minimizedWindow();
+  } else if (e->window.event == SDL_WINDOWEVENT_HIDDEN) {
+    hiddenWindow();
+  } else if (e->window.event == SDL_WINDOWEVENT_RESTORED) {
+    restoredWindow();
+  }
+
+  return 0; // Value will be ignored
+}
+void RendererContext::resizeWindow(SDL_Event *e) {
+  if (scr_width != e->window.data1 || scr_height != e->window.data2) {
+    scr_width = e->window.data1;
+    scr_height = e->window.data2;
+    SDL_SetWindowSize(window, scr_width, scr_height);
+    framebufferResized = true;
+  }
+}
+void RendererContext::minimizedWindow() { windowMinimizedOrHidden = true; }
+
+void RendererContext::hiddenWindow() { windowMinimizedOrHidden = true; }
+
+void RendererContext::restoredWindow() { windowMinimizedOrHidden = false; }
+
+void RendererContext::recreateSwapChain() {
+  while (windowMinimizedOrHidden || (scr_width == 0 || scr_height == 0)) {
+    SDL_WaitEvent(NULL);
+  }
   vkDeviceWaitIdle(device);
+
+  cleanupSwapChain();
+
+  createSwapChain();
+  createImageViews();
+  createFramebuffers();
+}
+void RendererContext::clear() {
+  cleanupSwapChain();
+
+  vkDestroyPipeline(device, graphicsPipeline, nullptr);
+  vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+
+  vkDestroyRenderPass(device, renderPass, nullptr);
+
   for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
     vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
     vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
     vkDestroyFence(device, inFlightFences[i], nullptr);
   }
+
   vkDestroyCommandPool(device, commandPool, nullptr);
-  for (auto framebuffer : swapChainFramebuffers) {
-    vkDestroyFramebuffer(device, framebuffer, nullptr);
-  }
-  for (auto imageView : swapChainImageViews) {
-    vkDestroyImageView(device, imageView, nullptr);
-  }
-  vkDestroyPipeline(device, graphicsPipeline, nullptr);
-  vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
-  vkDestroyRenderPass(device, renderPass, nullptr);
+
+  vkDestroyDevice(device, nullptr);
+
   if (enableValidationLayers) {
     DestroyDebugUtilsMessengerEXT(instance, nullptr);
   }
-  vkDestroySwapchainKHR(device, swapChain, nullptr);
-  vkDestroyDevice(device, nullptr);
   vkDestroySurfaceKHR(instance, surface, nullptr);
   vkDestroyInstance(instance, nullptr);
   SDL_DestroyWindow(window);
@@ -148,7 +221,8 @@ VKAPI_ATTR VkBool32 VKAPI_CALL RendererContext::debugCallback(
   case VK_DEBUG_UTILS_MESSAGE_TYPE_FLAG_BITS_MAX_ENUM_EXT:
     type = "FLAG_BITS_MAX_ENUM";
   }
-  std::cerr << severity << ": " << " Vulkan type: " << type
+  std::cerr << severity << ": "
+            << " Vulkan type: " << type
             << " Message: " << pCallbackData->pMessage << std::endl;
   return VK_FALSE;
 }
@@ -1000,4 +1074,13 @@ void RendererContext::createSyncObjects() {
           "failed to create synchronization objects for a frame!");
     }
   }
+}
+void RendererContext::cleanupSwapChain() {
+  for (auto framebuffer : swapChainFramebuffers) {
+    vkDestroyFramebuffer(device, framebuffer, nullptr);
+  }
+  for (auto imageView : swapChainImageViews) {
+    vkDestroyImageView(device, imageView, nullptr);
+  }
+  vkDestroySwapchainKHR(device, swapChain, nullptr);
 }
