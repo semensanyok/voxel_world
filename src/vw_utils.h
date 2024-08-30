@@ -1,5 +1,5 @@
-#ifndef vw_utilsvw_utils_h_
-#define vw_utilsvw_utils_h_
+#ifndef VW_UTILSVW_UTILS_H_
+#define VW_UTILSVW_UTILS_H_
 
 #include "logging.h"
 #include <format>
@@ -21,4 +21,4 @@ struct ArgsVW {
 };
 
 ArgsVW parse_arg(int argc, char *argv[]);
-#endif // vw_utilsvw_utils_h_
+#endif

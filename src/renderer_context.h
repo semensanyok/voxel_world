@@ -1,6 +1,7 @@
 #ifndef SW_RENDERER_CONTEXT
 #define SW_RENDERER_CONTEXT
 
+#include "gpu_structs.h"
 #include "settings_global.h"
 #include "vw_utils.h"
 #include <SDL.h>
@@ -61,6 +62,9 @@ private:
   // destroyed, so we don't need explicit cleanup.
   std::vector<VkCommandBuffer> commandBuffers;
 
+  VkBuffer vertexBuffer;
+  VkDeviceMemory vertexBufferMemory;
+
   VkDebugUtilsMessengerEXT debugMessenger;
 
   std::vector<VkSemaphore> imageAvailableSemaphores;
@@ -90,6 +94,11 @@ public:
   int windowCallback(SDL_Event *e);
 
 private:
+  // for test, to be removed ASAP.
+  const std::vector<Vertex> vertices = {{{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+                                        {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
+                                        {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}};
+
   void recreateWindow();
   void resizeWindow(SDL_Event *e);
   void minimizedWindow();
@@ -141,7 +150,9 @@ private:
   void createCommandBuffer();
   void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex);
   void createSyncObjects();
-
+  void createVertexBuffer();
+  uint32_t findMemoryType(uint32_t typeFilter,
+                          VkMemoryPropertyFlags properties);
   std::vector<char> readShaderFile(const char *filename);
 };
 

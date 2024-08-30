@@ -1,3 +1,4 @@
+#include "gpu_structs.h"
 #include "renderer_context.h"
 #include "vw_utils.h"
 #include <SDL.h>
@@ -7,6 +8,10 @@
 #include <string>
 
 RendererContext *rc;
+
+const std::vector<Vertex> vertices = {{{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+                                      {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
+                                      {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}};
 
 int resizeWindowCallback(void *userdata, SDL_Event *event) {
   if (event->type == SDL_WINDOWEVENT) {
