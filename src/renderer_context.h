@@ -42,6 +42,35 @@ private:
 
   VkSurfaceKHR surface;
 
+  // TODO: transfer queue, to not batch/block transfer with drawing commands
+  // https://vulkan-tutorial.com/Vertex_buffers/Staging_buffer
+  /*
+   Transfer queue
+The buffer copy command requires a queue family that supports transfer
+operations, which is indicated using VK_QUEUE_TRANSFER_BIT. The good news is
+that any queue family with VK_QUEUE_GRAPHICS_BIT or VK_QUEUE_COMPUTE_BIT
+capabilities already implicitly support VK_QUEUE_TRANSFER_BIT operations. The
+implementation is not required to explicitly list it in queueFlags in those
+cases.
+
+If you like a challenge, then you can still try to use a different queue family
+specifically for transfer operations. It will require you to make the following
+modifications to your program:
+
+- Modify QueueFamilyIndices and findQueueFamilies to explicitly look for a queue
+family with the VK_QUEUE_TRANSFER_BIT bit, but not the VK_QUEUE_GRAPHICS_BIT.
+- Modify createLogicalDevice
+to request a handle to the transfer queue
+- Create a second command pool
+for command buffers that are submitted on the transfer queue family
+- Change the sharingMode
+of resources to be VK_SHARING_MODE_CONCURRENT and
+specify both the graphics and transfer queue families
+- Submit any transfer commands like vkCmdCopyBuffer
+(which we'll be using in this chapter) to the
+transfer queue instead of the graphics queue It's a bit of work, but it'll teach
+you a lot about how resources are shared between queue families.
+  */
   VkQueue graphicsQueue;
   VkQueue presentQueue;
 
@@ -60,10 +89,15 @@ private:
   VkCommandPool commandPool;
   // Command buffers will be automatically freed when their command pool is
   // destroyed, so we don't need explicit cleanup.
+  //
+  // TODO: separate command buffer for transfer 1 time tasks with
+  // VK_COMMAND_POOL_CREATE_TRANSIENT_BIT
   std::vector<VkCommandBuffer> commandBuffers;
 
   VkBuffer vertexBuffer;
   VkDeviceMemory vertexBufferMemory;
+  VkBuffer stagingBuffer;
+  VkDeviceMemory stagingBufferMemory;
 
   VkDebugUtilsMessengerEXT debugMessenger;
 
@@ -151,6 +185,10 @@ private:
   void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex);
   void createSyncObjects();
   void createVertexBuffer();
+  void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
+                    VkMemoryPropertyFlags properties, VkBuffer &buffer,
+                    VkDeviceMemory &bufferMemory);
+  void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size);
   uint32_t findMemoryType(uint32_t typeFilter,
                           VkMemoryPropertyFlags properties);
   std::vector<char> readShaderFile(const char *filename);
