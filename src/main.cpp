@@ -38,6 +38,7 @@ int main(int argc, char *argv[]) {
       }
     }
     rc->drawFrame();
+    rc->postDraw();
   }
   rc->clear();
   return 0;

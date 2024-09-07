@@ -92,12 +92,32 @@ you a lot about how resources are shared between queue families.
   //
   // TODO: separate command buffer for transfer 1 time tasks with
   // VK_COMMAND_POOL_CREATE_TRANSIENT_BIT
+  // `Vulkan_optimizations.md#1.2.1`
   std::vector<VkCommandBuffer> commandBuffers;
 
-  VkBuffer vertexBuffer;
-  VkDeviceMemory vertexBufferMemory;
+  /* https://developer.nvidia.com/vulkan-memory-management
+   * Recommends using same buffer with offsets for vert/ind/uniform.
+   *  For Buffer memory we recommend making use of the offset mechanism the API
+   *  provides. Just like in OpenGL, Vulkan allows to binding a range of a
+   *  buffer. The benefit is that we avoid CPU memory costs for lots of tiny
+   *  buffers, as well as cache misses by using just the same buffer object and
+   *  varying the offset.
+   */
+
+  // VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, long term infrequent change? (my
+  // system reports 9 gb) textures.
+  VkBuffer deviceBuffer;
+  VkDeviceMemory deviceBufferMemory;
+  BufferOffsets deviceBufferOffsets;
+
+  // TODO: each thread write its own staging buffer with memory_order_release
+  // between frames transfer thread writes to device buffer, reading up to date
+  // staging with memory_order_acquire.
+  // thread id as index to vector with buf id.
+  // task based parallelism, each HW thread will have it
   VkBuffer stagingBuffer;
   VkDeviceMemory stagingBufferMemory;
+  BufferOffsets stagingBufferOffsets;
 
   VkDebugUtilsMessengerEXT debugMessenger;
 
@@ -126,6 +146,8 @@ public:
   void drawFrame();
   void recreateSwapChain();
   int windowCallback(SDL_Event *e);
+  BufferOffsets buffer(MeshLoadData &mesh_load_data) {}
+  void postDraw() { vkResetCommandPool(device, commandPool, NULL); }
 
 private:
   // for test, to be removed ASAP.

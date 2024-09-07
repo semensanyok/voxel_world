@@ -32,7 +32,6 @@ void RendererContext::drawFrame() {
   // Only reset the fence if we are submitting work
   vkResetFences(device, 1, &inFlightFences[currentFrame]);
 
-  vkResetCommandBuffer(commandBuffers[currentFrame], 0);
   recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
 
   VkSubmitInfo submitInfo{};
@@ -86,16 +85,6 @@ void RendererContext::drawFrame() {
 
 void RendererContext::init() {
   SDL_Init(SDL_INIT_VIDEO);
-  // SDL_WindowFlags window_flags =
-  //     (SDL_WindowFlags)(SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE |
-  //                       SDL_WINDOW_ALLOW_HIGHDPI // SDL_WINDOW_OPENGL
-  //     );
-  //
-  // window = SDL_CreateWindow("voxel_world", SDL_WINDOWPOS_CENTERED,
-  //                           SDL_WINDOWPOS_CENTERED, GameSettings::SCR_WIDTH,
-  //                           GameSettings::SCR_HEIGHT, window_flags);
-  // if (!window)
-  //   LOG_ERROR("Couldn't create window");
   recreateWindow();
 
   createInstance();
@@ -165,21 +154,22 @@ void RendererContext::recreateSwapChain() {
   createFramebuffers();
 }
 void RendererContext::clear() {
+  vkDeviceWaitIdle(device);
   cleanupSwapChain();
-
-  vkDestroyBuffer(device, vertexBuffer, nullptr);
-  vkFreeMemory(device, vertexBufferMemory, nullptr);
 
   vkDestroyPipeline(device, graphicsPipeline, nullptr);
   vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
-
   vkDestroyRenderPass(device, renderPass, nullptr);
+
+  vkDestroyBuffer(device, deviceBuffer, nullptr);
+  vkFreeMemory(device, deviceBufferMemory, nullptr);
 
   for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
     vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
     vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
     vkDestroyFence(device, inFlightFences[i], nullptr);
   }
+
   vkDestroyCommandPool(device, commandPool, nullptr);
 
   vkDestroyDevice(device, nullptr);
@@ -187,8 +177,10 @@ void RendererContext::clear() {
   if (enableValidationLayers) {
     DestroyDebugUtilsMessengerEXT(instance, nullptr);
   }
+
   vkDestroySurfaceKHR(instance, surface, nullptr);
   vkDestroyInstance(instance, nullptr);
+
   SDL_DestroyWindow(window);
   SDL_Quit();
 }
@@ -901,6 +893,11 @@ void RendererContext::createGraphicsPipeline() {
   pipelineInfo.basePipelineHandle = VK_NULL_HANDLE; // Optional
   pipelineInfo.basePipelineIndex = -1;              // Optional
 
+  // TODO: The big advantage of a pipeline cache is that the pipeline state can
+  // be saved to a file to be used between runs of an application, eliminating
+  // some of the costly parts of creation. There is a great Khronos presentation
+  // on pipeline caching from SIGGRAPH 2016
+  // https://docs.vulkan.org/guide/latest/pipeline_cache.html
   if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo,
                                 nullptr, &graphicsPipeline) != VK_SUCCESS) {
     throw std::runtime_error("failed to create graphics pipeline!");
@@ -988,7 +985,14 @@ void RendererContext::createCommandPool() {
    * buffers to be rerecorded individually, without this flag they all have to
    * be reset together
    */
-  poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+  /* https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/performance/command_buffer_usage#resetting-individual-command-buffers
+   * To reset the pool the flag RESET_COMMAND_BUFFER_BIT is not required, and it
+   * is actually better to avoid it since it prevents it from using a single
+   * large allocator for all buffers in the pool thus increasing memory
+   * overhead.
+   * dont set flag since rc->reset resets command pool each frame.
+   */
+  // poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
   poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily.value();
   if (vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool) !=
       VK_SUCCESS) {
@@ -1035,7 +1039,7 @@ void RendererContext::recordCommandBuffer(VkCommandBuffer commandBuffer,
 
   vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                     graphicsPipeline);
-  VkBuffer vertexBuffers[] = {vertexBuffer};
+  VkBuffer vertexBuffers[] = {deviceBuffer};
   VkDeviceSize offsets[] = {0};
   vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
 
@@ -1115,9 +1119,10 @@ void RendererContext::createVertexBuffer() {
   }
   createBuffer(
       bufferSize,
-      VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, vertexBuffer, vertexBufferMemory);
-  copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
+      VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+          VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, deviceBuffer, deviceBufferMemory);
+  copyBuffer(stagingBuffer, deviceBuffer, bufferSize);
 
   vkDestroyBuffer(device, stagingBuffer, nullptr);
   vkFreeMemory(device, stagingBufferMemory, nullptr);
