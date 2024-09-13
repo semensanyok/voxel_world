@@ -7,6 +7,9 @@
 #include <SDL.h>
 #include <SDL_stdinc.h>
 #include <SDL_vulkan.h>
+#include <array>
+#include <atomic>
+#include <cstdint>
 #include <optional>
 #include <vector>
 #include <vulkan/vulkan_core.h>
@@ -14,10 +17,40 @@
 #define STR(x) #x
 #define XSTR(x) STR(x)
 
+struct QueueFamily {
+  uint32_t id = 0;
+  // index to start from when calling vkGetDeviceQueue
+  uint32_t start_queue_num = 0;
+  uint32_t num_queues = 0;
+  VkQueueFlags type;
+  bool has_available() { return num_queues > 0; }
+  void advance_to_next_queue() {
+    start_queue_num++;
+    num_queues--;
+  }
+};
+struct TransferQueue {
+  uint32_t id;
+  //  You can only submit work to a VkQueue from one thread at a time, but
+  //  different threads can submit work to a different VkQueue simultaneously.
+  std::atomic_bool in_use;
+};
+
+const int NUM_TRANSFER_QUEUES = 2;
+
 struct QueueFamilyIndices {
-  std::optional<uint32_t> graphicsFamily;
-  std::optional<uint32_t> presentFamily;
-  bool isComplete() {
+  std::optional<QueueFamily> graphicsFamily;
+  std::optional<QueueFamily> presentFamily;
+  // Some GPU announce dedicated transfer queues, utilising DMA
+  // to asynchronously transfer data between host and device memory on discrete
+  // GPUs, so transfers can be done concurrently with independent
+  // graphics/compute operations.
+  // Graphics and present also support transfer. Consider them last, if no
+  // dedicated found.
+  // Queue Families with only VK_QUEUE_TRANSFER_BIT are usually for using DMA.
+  std::array<QueueFamily, NUM_TRANSFER_QUEUES> transferFamily;
+  std::optional<QueueFamily> computeFamily;
+  bool isCompleteGraphics() {
     return graphicsFamily.has_value() && presentFamily.has_value();
   }
 };
@@ -26,6 +59,28 @@ struct SwapChainSupportDetails {
   VkSurfaceCapabilitiesKHR capabilities;
   std::vector<VkSurfaceFormatKHR> formats;
   std::vector<VkPresentModeKHR> presentModes;
+};
+
+// Command buffers will be automatically freed when their command pool is
+// destroyed, so we don't need explicit cleanup.
+//
+// TODO: separate command buffer for transfer
+// VK_COMMAND_POOL_CREATE_TRANSIENT_BIT
+// `Vulkan_optimizations.md#1.2.1`
+//
+// pool per type of ops. dynamic culled draw/transfer with transient flag
+// (full pool reset each frame), persistent UI layout - per command reset flag
+// (https://docs.vulkan.org/spec/latest/chapters/cmdbuffers.html#commandbuffers-pools)
+//
+// Command pools are externally synchronized, meaning that a command pool must
+// not be used concurrently in multiple threads. That includes use via recording
+// commands on any command buffers allocated from the pool, as well as
+// operations that allocate, free, and reset command buffers or the pool itself.
+// It's not possible to record 2 command buffers from the same pool on different
+// threads. Create pool per thread, even for queues from same family.
+struct CommandPoolBuffers {
+  VkCommandPool commandPool;
+  std::vector<VkCommandBuffer> commandBuffers;
 };
 
 class RendererContext {
@@ -73,6 +128,13 @@ you a lot about how resources are shared between queue families.
   */
   VkQueue graphicsQueue;
   VkQueue presentQueue;
+  // - Queue Families with only VK_QUEUE_TRANSFER_BIT are usually for using DMA
+  // to asynchronously transfer data between host and device memory on discrete
+  // GPUs, so transfers can be done concurrently with independent
+  // graphics/compute operations.
+  // - VK_QUEUE_GRAPHICS_BIT and VK_QUEUE_COMPUTE_BIT can always implicitly
+  // accept VK_QUEUE_TRANSFER_BIT commands.
+  std::array<TransferQueue, NUM_TRANSFER_QUEUES> transfer_queues;
 
   VkSwapchainKHR swapChain;
   std::vector<VkImage> swapChainImages;
@@ -86,14 +148,8 @@ you a lot about how resources are shared between queue families.
 
   std::vector<VkFramebuffer> swapChainFramebuffers;
 
-  VkCommandPool commandPool;
-  // Command buffers will be automatically freed when their command pool is
-  // destroyed, so we don't need explicit cleanup.
-  //
-  // TODO: separate command buffer for transfer 1 time tasks with
-  // VK_COMMAND_POOL_CREATE_TRANSIENT_BIT
-  // `Vulkan_optimizations.md#1.2.1`
-  std::vector<VkCommandBuffer> commandBuffers;
+  CommandPoolBuffers dynamic_draw_commands;
+  CommandPoolBuffers transfer_commands;
 
   /* https://developer.nvidia.com/vulkan-memory-management
    * Recommends using same buffer with offsets for vert/ind/uniform.
@@ -176,6 +232,8 @@ private:
   setupDebugCreateInfo(VkDebugUtilsMessengerCreateInfoEXT &debugCreateInfo);
 
   void cleanupSwapChain();
+  void extracted(iterator &transfer_iter, bool &has_transfer,
+                 QueueFamily &next_c);
   QueueFamilyIndices
   findQueueFamilies(VkPhysicalDevice &physical_device_candidate);
   bool isDeviceSuitable(VkPhysicalDevice &device);

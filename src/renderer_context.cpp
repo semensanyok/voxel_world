@@ -4,10 +4,14 @@
 #include <SDL_events.h>
 #include <SDL_video.h>
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <numeric>
+#include <optional>
 #include <set>
 #include <vulkan/vulkan_core.h>
 
@@ -32,7 +36,8 @@ void RendererContext::drawFrame() {
   // Only reset the fence if we are submitting work
   vkResetFences(device, 1, &inFlightFences[currentFrame]);
 
-  recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
+  recordCommandBuffer(dynamic_draw_commands.commandBuffers[currentFrame],
+                      imageIndex);
 
   VkSubmitInfo submitInfo{};
   submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -45,7 +50,8 @@ void RendererContext::drawFrame() {
   submitInfo.pWaitDstStageMask = waitStages;
 
   submitInfo.commandBufferCount = 1;
-  submitInfo.pCommandBuffers = &commandBuffers[currentFrame];
+  submitInfo.pCommandBuffers =
+      &dynamic_draw_commands.commandBuffers[currentFrame];
 
   VkSemaphore signalSemaphores[] = {renderFinishedSemaphores[currentFrame]};
   submitInfo.signalSemaphoreCount = 1;
@@ -170,7 +176,8 @@ void RendererContext::clear() {
     vkDestroyFence(device, inFlightFences[i], nullptr);
   }
 
-  vkDestroyCommandPool(device, commandPool, nullptr);
+  vkDestroyCommandPool(device, dynamic_draw_commands.commandPool, nullptr);
+  vkDestroyCommandPool(device, transfer_commands.commandPool, nullptr);
 
   vkDestroyDevice(device, nullptr);
 
@@ -269,25 +276,35 @@ QueueFamilyIndices RendererContext::findQueueFamilies(
   vkGetPhysicalDeviceQueueFamilyProperties(
       physical_device_candidate, &queueFamilyCount, queueFamilies.data());
   // Assign index to queue families that could be found
-  int i = 0;
-  std::vector<int> graphicsFamilies;
-  std::vector<int> presentFamilies;
+  uint32_t i = 0;
+  std::vector<QueueFamily> graphicsFamilies;
+  std::vector<QueueFamily> presentFamilies;
+  std::vector<QueueFamily> transferFamilies;
+  std::vector<QueueFamily> computeFamilies;
 
   for (const auto &queueFamily : queueFamilies) {
-    if (queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-      graphicsFamilies.push_back(i);
-      indices.graphicsFamily = i;
+    auto is_graphics = queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT;
+    if (is_graphics) {
+      graphicsFamilies.push_back(
+          {i, 0, queueFamily.queueCount, queueFamily.queueFlags});
     }
     VkBool32 presentSupport = false;
     vkGetPhysicalDeviceSurfaceSupportKHR(physical_device_candidate, i, surface,
                                          &presentSupport);
     if (presentSupport) {
-      presentFamilies.push_back(i);
-      indices.presentFamily = i;
+      presentFamilies.push_back(
+          {i, 0, queueFamily.queueCount, queueFamily.queueFlags});
     }
-    if (indices.graphicsFamily.has_value() &&
-        indices.presentFamily.has_value()) {
-      break;
+    // seek dedicated compute and transfer. compute also support transfer, but
+    // transfer specialised is better since its DMA.
+    if (!is_graphics) {
+      if (queueFamily.queueFlags & VK_QUEUE_COMPUTE_BIT) {
+        computeFamilies.push_back(
+            {i, 0, queueFamily.queueCount, queueFamily.queueFlags});
+      } else if (queueFamily.queueFlags & VK_QUEUE_TRANSFER_BIT) {
+        transferFamilies.push_back(
+            {i, 0, queueFamily.queueCount, queueFamily.queueFlags});
+      }
     }
     i++;
   }
@@ -297,23 +314,98 @@ QueueFamilyIndices RendererContext::findQueueFamilies(
   if (presentFamilies.empty()) {
     throw std::runtime_error("not found presentFamily");
   }
+  // determinte graphics/present queues
   // prioritise same queue, to not do thransfer step
-  int graphicsFamily = -1, presentFamily = -1;
-  for (int i : graphicsFamilies) {
-    if (std::find(presentFamilies.begin(), presentFamilies.end(), i) !=
+  // My initial unexperienced assumption. to be revised. probably can benefit
+  // from separate graphics/present
+  std::optional<QueueFamily> graphicsFamily, presentFamily;
+  for (auto i : graphicsFamilies) {
+    if (std::find_if(presentFamilies.begin(), presentFamilies.end(),
+                     [&i](QueueFamily &f) { return f.id == i.id; }) !=
         presentFamilies.end()) {
       graphicsFamily = i;
       presentFamily = i;
       break;
     }
   }
-  if (graphicsFamily == -1) {
+  // need only 1 queue for graphics
+  if (!graphicsFamily.has_value()) {
     graphicsFamily = graphicsFamilies.at(0);
+    graphicsFamily->num_queues = 1;
+    graphicsFamilies.at(0).advance_to_next_queue();
   }
 
-  if (presentFamily == -1) {
+  if (!presentFamily.has_value()) {
     presentFamily = presentFamilies.at(0);
+    presentFamily->num_queues = 1;
+    presentFamilies.at(0).advance_to_next_queue();
   }
+  indices.presentFamily = presentFamily;
+  indices.graphicsFamily = graphicsFamily;
+  if (!computeFamilies.empty()) {
+    indices.computeFamily = computeFamilies.at(0);
+    computeFamilies.erase(computeFamilies.begin());
+  }
+  // DEFINE TRANSFER QUEUES
+  // //////////////////////////////////////////////////////////
+  int transfer_family_index = 0;
+  auto transfer_iter = transferFamilies.begin();
+  auto graphics_iter = graphicsFamilies.begin();
+  auto compute_iter = computeFamilies.begin();
+  bool has_transfer = false;
+  bool has_graphics = false;
+  bool has_compute = false;
+  bool init = true;
+  while (((has_transfer = (transfer_iter != transferFamilies.end() &&
+                           transfer_iter->has_available())) ||
+          (has_graphics = (graphics_iter != graphicsFamilies.end() &&
+                           graphics_iter->has_available())) ||
+          (has_compute = (compute_iter != computeFamilies.end() &&
+                          compute_iter->has_available()))) &&
+         transfer_family_index < NUM_TRANSFER_QUEUES) {
+    if (has_transfer) {
+      if (transfer_iter->num_queues <= NUM_TRANSFER_QUEUES) {
+        indices.transferFamily = {*transfer_iter};
+        break;
+      }
+    }
+    QueueFamily &out = indices.transferFamily.at(transfer_family_index);
+    QueueFamily next_c;
+    if (has_transfer) {
+      next_c = *transfer_iter;
+      transfer_iter->advance_to_next_queue();
+    } else if (has_graphics) {
+      next_c = *graphics_iter;
+      graphics_iter->advance_to_next_queue();
+    } else if (has_compute) {
+      next_c = *compute_iter;
+      compute_iter->advance_to_next_queue();
+    }
+    if (init) {
+      out = next_c;
+      out.num_queues = 1;
+    } else if (indices.transferFamily[transfer_family_index].id == next_c.id) {
+      out.num_queues++;
+    } else {
+      transfer_family_index++;
+      if (transfer_family_index >= NUM_TRANSFER_QUEUES) {
+        break;
+      }
+      QueueFamily &out2 = indices.transferFamily.at(transfer_family_index);
+      out2 = next_c;
+      out2.num_queues = 1;
+    }
+    uint32_t num_queues_res = 0;
+    for (auto &f : indices.transferFamily) {
+      num_queues_res += f.num_queues;
+    }
+    if (num_queues_res >= NUM_TRANSFER_QUEUES) {
+      break;
+    }
+    init = false;
+  }
+  // DEFINE TRANSFER QUEUES END
+  // //////////////////////////////////////////////////
   return indices;
 }
 
@@ -334,7 +426,8 @@ bool RendererContext::isDeviceSuitable(VkPhysicalDevice &device) {
     swapChainAdequate = !swapChainSupport.formats.empty() &&
                         !swapChainSupport.presentModes.empty();
   }
-  return indices.isComplete() && extensionsSupported && swapChainAdequate;
+  return indices.isCompleteGraphics() && extensionsSupported &&
+         swapChainAdequate;
 }
 
 int RendererContext::rateDeviceSuitability(
@@ -408,6 +501,8 @@ void RendererContext::createLogicalDevice() {
     throw std::runtime_error("failed to create logical device!");
   }
   vkGetDeviceQueue(device, indices.graphicsFamily.value(), 0, &graphicsQueue);
+  vkGetDeviceQueue(device, indices.presentFamily.value(), 0, &presentQueue);
+  transfer_queues.resize(indices.transferFamilies.size());
   vkGetDeviceQueue(device, indices.presentFamily.value(), 0, &presentQueue);
 }
 
@@ -505,15 +600,39 @@ std::vector<VkDeviceQueueCreateInfo>
 RendererContext::get_physical_device_queues(QueueFamilyIndices &indices) {
 
   std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
-  std::set<uint32_t> uniqueQueueFamilies = {indices.graphicsFamily.value(),
-                                            indices.presentFamily.value()};
-
   float queuePriority = 1.0f;
-  for (uint32_t queueFamily : uniqueQueueFamilies) {
+  auto graphics_queue = indices.graphicsFamily.value();
+  auto present_queue = indices.presentFamily.value();
+  auto is_graphics_present_same = graphics_queue.id != present_queue.id;
+  int num_transfer_from_graphics_family = 0;
+  int num_transfer_from_present_family = 0;
+
+  for (auto &q : indices.transferFamily) {
+    if (q.id == graphics_queue.id) {
+      num_transfer_from_graphics_family++;
+    } else if (!is_graphics_present_same && q.id == present_queue.id) {
+      num_transfer_from_present_family++;
+    } else {
+      VkDeviceQueueCreateInfo queueCreateInfo{};
+      queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+      queueCreateInfo.queueFamilyIndex = q.id;
+      queueCreateInfo.queueCount = q.num_queues;
+      queueCreateInfo.pQueuePriorities = &queuePriority;
+      queueCreateInfos.push_back(queueCreateInfo);
+    }
+  }
+  VkDeviceQueueCreateInfo queueCreateInfo{};
+  queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+  queueCreateInfo.queueFamilyIndex = graphics_queue.id;
+  queueCreateInfo.queueCount = 1 + num_transfer_from_graphics_family;
+  queueCreateInfo.pQueuePriorities = &queuePriority;
+  queueCreateInfos.push_back(queueCreateInfo);
+
+  if (!is_graphics_present_same) {
     VkDeviceQueueCreateInfo queueCreateInfo{};
     queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-    queueCreateInfo.queueFamilyIndex = queueFamily;
-    queueCreateInfo.queueCount = 1;
+    queueCreateInfo.queueFamilyIndex = present_queue.id;
+    queueCreateInfo.queueCount = 1 + num_transfer_from_present_family;
     queueCreateInfo.pQueuePriorities = &queuePriority;
     queueCreateInfos.push_back(queueCreateInfo);
   }
@@ -613,10 +732,10 @@ void RendererContext::createSwapChain() {
   createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
   QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
-  uint32_t queueFamilyIndices[] = {indices.graphicsFamily.value(),
-                                   indices.presentFamily.value()};
+  uint32_t queueFamilyIndices[] = {indices.graphicsFamily->id,
+                                   indices.presentFamily->id};
 
-  if (indices.graphicsFamily != indices.presentFamily) {
+  if (indices.graphicsFamily->id != indices.presentFamily->id) {
     createInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
     createInfo.queueFamilyIndexCount = 2;
     createInfo.pQueueFamilyIndices = queueFamilyIndices;
@@ -975,28 +1094,44 @@ void RendererContext::createFramebuffers() {
 void RendererContext::createCommandPool() {
   QueueFamilyIndices queueFamilyIndices = findQueueFamilies(physicalDevice);
 
-  VkCommandPoolCreateInfo poolInfo{};
-  poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-  /*
-   * VK_COMMAND_POOL_CREATE_TRANSIENT_BIT: Hint that command buffers are
-   * rerecorded with new commands very often (may change memory allocation
-   * behavior)
-   * VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT: Allow command
-   * buffers to be rerecorded individually, without this flag they all have to
-   * be reset together
-   */
-  /* https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/performance/command_buffer_usage#resetting-individual-command-buffers
-   * To reset the pool the flag RESET_COMMAND_BUFFER_BIT is not required, and it
-   * is actually better to avoid it since it prevents it from using a single
-   * large allocator for all buffers in the pool thus increasing memory
-   * overhead.
-   * dont set flag since rc->reset resets command pool each frame.
-   */
-  // poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-  poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily.value();
-  if (vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool) !=
-      VK_SUCCESS) {
-    throw std::runtime_error("failed to create command pool!");
+  {
+    /*
+     * VK_COMMAND_POOL_CREATE_TRANSIENT_BIT: Hint that command buffers are
+     * rerecorded with new commands very often (may change memory allocation
+     * behavior)
+     * VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT: Allow command
+     * buffers to be rerecorded individually, without this flag they all have to
+     * be reset together
+     */
+    /* https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/performance/command_buffer_usage#resetting-individual-command-buffers
+     * To reset the pool the flag RESET_COMMAND_BUFFER_BIT is not required, and
+     * it is actually better to avoid it since it prevents it from using a
+     * single large allocator for all buffers in the pool thus increasing memory
+     * overhead.
+     * dont set flag since rc->reset resets command pool each frame.
+     *
+     * but what about persistent draws, like UI? another pool?
+     */
+    // poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    VkCommandPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+    poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily->id;
+    if (vkCreateCommandPool(device, &poolInfo, nullptr,
+                            &dynamic_draw_commands.commandPool) != VK_SUCCESS) {
+      throw std::runtime_error("failed to create command pool!");
+    }
+  }
+  for (int i = 0; i < queueFamilyIndices.transferFamily.size(); i++) {
+    QueueFamily &thread_queue = queueFamilyIndices.transferFamily.at(i);
+    VkCommandPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+    poolInfo.queueFamilyIndex = thread_queue.id;
+    if (vkCreateCommandPool(device, &poolInfo, nullptr,
+                            &transfer_commands.commandPool) != VK_SUCCESS) {
+      throw std::runtime_error("failed to create command pool!");
+    }
   }
 }
 void RendererContext::createCommandBuffer() {

@@ -12,6 +12,8 @@
  */
 class ThreadPool {
   std::vector<std::thread> worker_threads;
-  std::vector<std::function<void()>> tasks;
+  // hw thread index to fetch thread locals, such as Vulkan command pool. dont
+  // want to use std::thread_local (unreasoned)
+  std::vector<std::vector<std::function<unsigned int>>> tasks;
 };
 #endif

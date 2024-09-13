@@ -1,4 +1,4 @@
-# some long term considerations not present in source comments
+# Reasoning behind graphics engine architectural decisions
 
 # 1.1 Aim for 15-30 command buffers and 5-10 vkQueueSubmit() calls per frame, batch VkSubmitInfo() to a single call as much as possible. Each vkQueueSubmit() has a performance cost on CPU, so lower is generally better. Note that VkSemaphore-based 
 https://developer.nvidia.com/blog/vulkan-dos-donts/
@@ -46,7 +46,7 @@ Debugging
 
 ### 1.2.2 https://developer.nvidia.com/blog/vulkan-dos-donts/
 Calling vkQueueSubmit() does start work on the GPU. 
-!!! Use a separate command pool for each thread that records command buffers, for each frame.
+Use a separate command pool for each thread that records command buffers, for each frame.
 
 Reuse command buffers when possible. Secondary command buffers can be helpful here, depending on the workload – check carefully to determine if they are actually advantageous.
 
@@ -54,6 +54,37 @@ Use L * T + N pools. (L = the number of buffered frames, T = the number of threa
 
 Don’t create or destroy command pools, reuse them instead. Save the overhead of allocator creation/destruction and memory allocation/free (###1.2.1)
 
+Multi-threaded recording
+To record command buffers concurrently, the framework needs to manage resource pools per frame and per thread. According to the Vulkan Spec:
+[A command pool must not be used concurrently in multiple threads.](https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkCommandPool.html)
+Command pools are externally synchronized, meaning that a command pool must
+not be used concurrently in multiple threads. That includes use via recording
+commands on any command buffers allocated from the pool, as well as
+operations that allocate, free, and reset command buffers or the pool itself.
+It's not possible to record 2 command buffers from the same pool on different
+threads. Create pool per thread, even for queues from same family.
+[The application must not allocate and/or free descriptor sets from the same pool in multiple threads simultaneously.](https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkDescriptorPool.html)
+
+[ Build command buffers in parallel and evenly across several threads/cores to multiple command lists. Recording commands is a CPU intensive operation and no driver threads come to the rescue. ](https://developer.nvidia.com/blog/vulkan-dos-donts/)
+[ Don’t create too many threads or too many command lists. Too many threads will oversubscribe your CPU resources, too many command lists may accumulate too much overhead. ](https://developer.nvidia.com/blog/vulkan-dos-donts/)
+
+[ The following are the queue operations found in VkQueueFlagBits: ](https://docs.vulkan.org/guide/latest/queues.html#_queue_family)
+- VK_QUEUE_GRAPHICS_BIT used for vkCmdDraw* and graphic pipeline commands.
+- VK_QUEUE_COMPUTE_BIT used for vkCmdDispatch* and vkCmdTraceRays* and compute pipeline related commands.
+- VK_QUEUE_TRANSFER_BIT used for all transfer commands.
+- VK_PIPELINE_STAGE_TRANSFER_BIT in the Spec describes “transfer commands”.
+Queue Families with only VK_QUEUE_TRANSFER_BIT are usually for using DMA to asynchronously transfer data between host and device memory on discrete GPUs, so transfers can be done concurrently with independent graphics/compute operations.
+- VK_QUEUE_GRAPHICS_BIT and VK_QUEUE_COMPUTE_BIT can always implicitly accept VK_QUEUE_TRANSFER_BIT commands.
+- VK_QUEUE_SPARSE_BINDING_BIT used for binding sparse resources to memory with vkQueueBindSparse.
+- VK_QUEUE_PROTECTED_BIT used for protected memory.
+- VK_QUEUE_VIDEO_DECODE_BIT_KHR and VK_QUEUE_VIDEO_ENCODE_BIT_KHR used with Vulkan Video.
+
+[ Without DMA, when the CPU is using programmed input/output, it is typically fully occupied for the entire duration of the read or write operation, and is thus unavailable to perform other work. With DMA, the CPU first initiates the transfer, then it does other operations while the transfer is in progress, and it finally receives an interrupt from the DMA controller (DMAC) when the operation is done. This feature is useful at any time that the CPU cannot keep up with the rate of data transfer, or when the CPU needs to perform work while waiting for a relatively slow I/O data transfer.  ](https://en.wikipedia.org/wiki/Direct_memory_access)
+
+### You can only submit work to a VkQueue from one thread at a time, but different threads can submit work to a different VkQueue simultaneously. 
+[ A “Queue Family” just describes a set of VkQueue's that have common properties and support the same functionality ](https://docs.vulkan.org/guide/latest/queues.html). So multithread access to same family is permitted, as family is just a label. And dedicated DMA transfer queues reside under family with only VK_QUEUE_TRANSFER_BIT;
+
+My note: for transfer queue: spin iterate all atomics "queue is in use" flags with relaxed order, then try acquire with CAS. Better than single thread submit of per thread lists (need to block each, and not using other 10 HW transfer/compute dedicated queues). GPU exposes many transfer queues.
 
 # 1.3 DEVICE_LOCAL HOST_VISIBLE_BIT etc.
 
