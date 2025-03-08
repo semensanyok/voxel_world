@@ -1,5 +1,6 @@
 ### 1. CURRENT PROJECT
 build/*
+*Session.vim
 
 ### 2. TEMPLATES FROM https://github.com/github/gitignore/
 ### CMake.gitignore

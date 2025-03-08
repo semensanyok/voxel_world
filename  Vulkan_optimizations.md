@@ -64,7 +64,10 @@ operations that allocate, free, and reset command buffers or the pool itself.
 It's not possible to record 2 command buffers from the same pool on different
 threads. Create pool per thread, even for queues from same family.
 [The application must not allocate and/or free descriptor sets from the same pool in multiple threads simultaneously.](https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkDescriptorPool.html)
-
+23/02/2025 
+  - Create transfer workers and put them in queue. Initialize command pool, command buffer, staging buffer in main thread. 
+    Only recording must be done from a thread that acquires a worker. Not necessary to postpone the initialization.
+  
 [ Build command buffers in parallel and evenly across several threads/cores to multiple command lists. Recording commands is a CPU intensive operation and no driver threads come to the rescue. ](https://developer.nvidia.com/blog/vulkan-dos-donts/)
 [ Don’t create too many threads or too many command lists. Too many threads will oversubscribe your CPU resources, too many command lists may accumulate too much overhead. ](https://developer.nvidia.com/blog/vulkan-dos-donts/)
 
@@ -81,10 +84,14 @@ Queue Families with only VK_QUEUE_TRANSFER_BIT are usually for using DMA to asyn
 
 [ Without DMA, when the CPU is using programmed input/output, it is typically fully occupied for the entire duration of the read or write operation, and is thus unavailable to perform other work. With DMA, the CPU first initiates the transfer, then it does other operations while the transfer is in progress, and it finally receives an interrupt from the DMA controller (DMAC) when the operation is done. This feature is useful at any time that the CPU cannot keep up with the rate of data transfer, or when the CPU needs to perform work while waiting for a relatively slow I/O data transfer.  ](https://en.wikipedia.org/wiki/Direct_memory_access)
 
-### You can only submit work to a VkQueue from one thread at a time, but different threads can submit work to a different VkQueue simultaneously. 
+### You can only submit work to a VkQueue from one thread at a time, but different threads can submit work to a different VkQueue simultaneously. https://community.khronos.org/t/disadvantages-of-using-multiple-command-buffers-with-one-thread/107399/3
+// You cannot submit to the same queue from different threads at the same time. Therefore, if you have multiple threads building CBs, they must either synchronize their vkQueueSubmit calls or send their CBs synchronously to a thread that does a single vkQueueSubmit call.
 [ A “Queue Family” just describes a set of VkQueue's that have common properties and support the same functionality ](https://docs.vulkan.org/guide/latest/queues.html). So multithread access to same family is permitted, as family is just a label. And dedicated DMA transfer queues reside under family with only VK_QUEUE_TRANSFER_BIT;
 
-My note: for transfer queue: spin iterate all atomics "queue is in use" flags with relaxed order, then try acquire with CAS. Better than single thread submit of per thread lists (need to block each, and not using other 10 HW transfer/compute dedicated queues). GPU exposes many transfer queues.
+My note: for transfer queue, spin iterate until acquire queue with CAS. Better than single thread submit of per thread lists (need to block each, and not using other 10 HW transfer/compute dedicated queues). GPU exposes many transfer queues.
+
+11/01/2025 
+Lock shared transfer queue on submit. Otherwise can have thread with queue, polling other threads prepared commands arrays once per frame. First option is implemented in Godot engine - shared queue, locked on submit.
 
 # 1.3 DEVICE_LOCAL HOST_VISIBLE_BIT etc.
 

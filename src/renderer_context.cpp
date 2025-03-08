@@ -500,10 +500,18 @@ void RendererContext::createLogicalDevice() {
       VK_SUCCESS) {
     throw std::runtime_error("failed to create logical device!");
   }
-  vkGetDeviceQueue(device, indices.graphicsFamily.value(), 0, &graphicsQueue);
-  vkGetDeviceQueue(device, indices.presentFamily.value(), 0, &presentQueue);
-  transfer_queues.resize(indices.transferFamilies.size());
-  vkGetDeviceQueue(device, indices.presentFamily.value(), 0, &presentQueue);
+  vkGetDeviceQueue(device, indices.graphicsFamily.value().id,
+                   indices.graphicsFamily.value().start_queue_num,
+                   &graphicsQueue);
+  vkGetDeviceQueue(device, indices.presentFamily.value().id,
+                   indices.presentFamily.value().start_queue_num,
+                   &presentQueue);
+  for (auto q : transfer_queues) {
+
+    vkGetDeviceQueue(device, indices.presentFamily.value().id,
+                     indices.presentFamily.value().start_queue_num,
+                     &presentQueue);
+  }
 }
 
 void RendererContext::createInstance() {
@@ -1347,4 +1355,3 @@ void RendererContext::copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer,
   vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
   vkQueueWaitIdle(graphicsQueue);
   vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
-}

@@ -29,6 +29,9 @@ struct QueueFamily {
     num_queues--;
   }
 };
+
+//  You can only submit work to a VkQueue from one thread at a time, but
+//  different threads can submit work to a different VkQueue simultaneously.
 struct TransferQueue {
   uint32_t id;
   //  You can only submit work to a VkQueue from one thread at a time, but
@@ -37,6 +40,10 @@ struct TransferQueue {
 };
 
 const int NUM_TRANSFER_QUEUES = 2;
+// TODO: must be equal to the number of threads doing the recording.
+//       Find out on the program init how many are required.
+//       Could be less? Per thread recorded commands arrays flushed?
+const int NUM_COMMAND_POOLS = 2;
 
 struct QueueFamilyIndices {
   std::optional<QueueFamily> graphicsFamily;
@@ -78,9 +85,14 @@ struct SwapChainSupportDetails {
 // operations that allocate, free, and reset command buffers or the pool itself.
 // It's not possible to record 2 command buffers from the same pool on different
 // threads. Create pool per thread, even for queues from same family.
-struct CommandPoolBuffers {
+struct ThreadCommandPool {
   VkCommandPool commandPool;
-  std::vector<VkCommandBuffer> commandBuffers;
+  std::atomic_bool in_use;
+  // commands resetted each frame, like dynamic draw or transfer from staging to
+  // device buffer
+  std::vector<VkCommandBuffer> transient_commands;
+  // persistent commands, like non immediate gui
+  std::vector<VkCommandBuffer> persistent_commands;
 };
 
 class RendererContext {
@@ -97,37 +109,6 @@ private:
 
   VkSurfaceKHR surface;
 
-  // TODO: transfer queue, to not batch/block transfer with drawing commands
-  // https://vulkan-tutorial.com/Vertex_buffers/Staging_buffer
-  /*
-   Transfer queue
-The buffer copy command requires a queue family that supports transfer
-operations, which is indicated using VK_QUEUE_TRANSFER_BIT. The good news is
-that any queue family with VK_QUEUE_GRAPHICS_BIT or VK_QUEUE_COMPUTE_BIT
-capabilities already implicitly support VK_QUEUE_TRANSFER_BIT operations. The
-implementation is not required to explicitly list it in queueFlags in those
-cases.
-
-If you like a challenge, then you can still try to use a different queue family
-specifically for transfer operations. It will require you to make the following
-modifications to your program:
-
-- Modify QueueFamilyIndices and findQueueFamilies to explicitly look for a queue
-family with the VK_QUEUE_TRANSFER_BIT bit, but not the VK_QUEUE_GRAPHICS_BIT.
-- Modify createLogicalDevice
-to request a handle to the transfer queue
-- Create a second command pool
-for command buffers that are submitted on the transfer queue family
-- Change the sharingMode
-of resources to be VK_SHARING_MODE_CONCURRENT and
-specify both the graphics and transfer queue families
-- Submit any transfer commands like vkCmdCopyBuffer
-(which we'll be using in this chapter) to the
-transfer queue instead of the graphics queue It's a bit of work, but it'll teach
-you a lot about how resources are shared between queue families.
-  */
-  VkQueue graphicsQueue;
-  VkQueue presentQueue;
   // - Queue Families with only VK_QUEUE_TRANSFER_BIT are usually for using DMA
   // to asynchronously transfer data between host and device memory on discrete
   // GPUs, so transfers can be done concurrently with independent
@@ -135,6 +116,19 @@ you a lot about how resources are shared between queue families.
   // - VK_QUEUE_GRAPHICS_BIT and VK_QUEUE_COMPUTE_BIT can always implicitly
   // accept VK_QUEUE_TRANSFER_BIT commands.
   std::array<TransferQueue, NUM_TRANSFER_QUEUES> transfer_queues;
+
+  // idea is to asign transfer queue per thread and distribute transfer tasks
+  // between capable threads.
+  TransferQueue *GetAvailableTransferQueue() {
+    for (auto &tq : transfer_queues) {
+      bool expected = false;
+      bool desired = true;
+      if (tq.in_use.compare_exchange_strong(expected, desired)) {
+        return &tq;
+      }
+    }
+    return nullptr;
+  }
 
   VkSwapchainKHR swapChain;
   std::vector<VkImage> swapChainImages;
@@ -148,8 +142,10 @@ you a lot about how resources are shared between queue families.
 
   std::vector<VkFramebuffer> swapChainFramebuffers;
 
-  CommandPoolBuffers dynamic_draw_commands;
-  CommandPoolBuffers transfer_commands;
+  // TODO: delete 2 ThreadCommandPool variables. Replace with TransferWorker
+  // alike (Godot)
+  ThreadCommandPool dynamic_draw_commands[NUM_COMMAND_POOLS];
+  ThreadCommandPool transfer_commands[NUM_COMMAND_POOLS];
 
   /* https://developer.nvidia.com/vulkan-memory-management
    * Recommends using same buffer with offsets for vert/ind/uniform.
@@ -203,7 +199,14 @@ public:
   void recreateSwapChain();
   int windowCallback(SDL_Event *e);
   BufferOffsets buffer(MeshLoadData &mesh_load_data) {}
-  void postDraw() { vkResetCommandPool(device, commandPool, NULL); }
+  void postDraw() {
+    for (ThreadCommandPool &p : dynamic_draw_commands) {
+      vkResetCommandPool(device, p.commandPool, NULL);
+    }
+    for (ThreadCommandPool &p : transfer_commands) {
+      vkResetCommandPool(device, p.commandPool, NULL);
+    }
+  }
 
 private:
   // for test, to be removed ASAP.
@@ -232,8 +235,6 @@ private:
   setupDebugCreateInfo(VkDebugUtilsMessengerCreateInfoEXT &debugCreateInfo);
 
   void cleanupSwapChain();
-  void extracted(iterator &transfer_iter, bool &has_transfer,
-                 QueueFamily &next_c);
   QueueFamilyIndices
   findQueueFamilies(VkPhysicalDevice &physical_device_candidate);
   bool isDeviceSuitable(VkPhysicalDevice &device);
