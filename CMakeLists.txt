@@ -1,4 +1,6 @@
-cmake_minimum_required(VERSION 3.0.0)
+# cmake_minimum_required(VERSION 4.0)
+cmake_minimum_required(VERSION 3.30)
+
 project(voxel_world VERSION 0.1.0 LANGUAGES C CXX)
 
 # nvim clangd LSP server issue
@@ -36,7 +38,7 @@ list(APPEND CMAKE_MODULE_PATH
  "${OpenVDB_DIR}")
 
 find_package(Vulkan REQUIRED)
-find_package(glm REQUIRED)
+find_package(glm CONFIG REQUIRED)
 find_package(OpenVDB REQUIRED)
 find_package(SDL2 REQUIRED)
 find_package(SDL2_image REQUIRED)
@@ -122,7 +124,7 @@ DEPENDS ${outfilename_full}
 OUTPUT ${outfilename_full}
 COMMENT "compile shader ${filename}"
 WORKING_DIRECTORY ${GTK_UI_PATH}
-COMMAND ${VULKAN_BIN_DIR}/glslc.exe
+COMMAND ${Vulkan_GLSLC_EXECUTABLE}
 ARGS
 ${filename}
 -o
