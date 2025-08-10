@@ -3,6 +3,7 @@
 
 #include "gpu_structs.h"
 #include "settings_global.h"
+#include "vw_constants.h"
 #include "vw_utils.h"
 #include <SDL.h>
 #include <SDL_stdinc.h>
@@ -10,12 +11,15 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <mutex>
 #include <optional>
 #include <vector>
 #include <vulkan/vulkan_core.h>
 
 #define STR(x) #x
 #define XSTR(x) STR(x)
+
+const int MAX_FRAMES_IN_FLIGHT = 2;
 
 struct QueueFamily {
   uint32_t id = 0;
@@ -29,22 +33,6 @@ struct QueueFamily {
     num_queues--;
   }
 };
-
-//  You can only submit work to a VkQueue from one thread at a time, but
-//  different threads can submit work to a different VkQueue simultaneously.
-struct TransferQueue {
-  uint32_t id;
-  //  You can only submit work to a VkQueue from one thread at a time, but
-  //  different threads can submit work to a different VkQueue simultaneously.
-  std::atomic_bool in_use;
-};
-
-const int NUM_TRANSFER_QUEUES = 2;
-// TODO: must be equal to the number of threads doing the recording.
-//       Find out on the program init how many are required.
-//       Could be less? Per thread recorded commands arrays flushed?
-const int NUM_COMMAND_POOLS = 2;
-
 struct QueueFamilyIndices {
   std::optional<QueueFamily> graphicsFamily;
   std::optional<QueueFamily> presentFamily;
@@ -55,7 +43,10 @@ struct QueueFamilyIndices {
   // Graphics and present also support transfer. Consider them last, if no
   // dedicated found.
   // Queue Families with only VK_QUEUE_TRANSFER_BIT are usually for using DMA.
-  std::array<QueueFamily, NUM_TRANSFER_QUEUES> transferFamily;
+  // single queue is ok, not a bottleneck. (see Vulkan_optimizations_2.md: Godot
+  // uses single queue; Transfer speed is limited by memory bandwidth, not queue
+  // submissions; Lock held for microseconds, not milliseconds)
+  std::optional<QueueFamily> transferFamily;
   std::optional<QueueFamily> computeFamily;
   bool isCompleteGraphics() {
     return graphicsFamily.has_value() && presentFamily.has_value();
@@ -68,37 +59,30 @@ struct SwapChainSupportDetails {
   std::vector<VkPresentModeKHR> presentModes;
 };
 
-// Command buffers will be automatically freed when their command pool is
-// destroyed, so we don't need explicit cleanup.
-//
-// TODO: separate command buffer for transfer
-// VK_COMMAND_POOL_CREATE_TRANSIENT_BIT
-// `Vulkan_optimizations.md#1.2.1`
-//
-// pool per type of ops. dynamic culled draw/transfer with transient flag
-// (full pool reset each frame), persistent UI layout - per command reset flag
-// (https://docs.vulkan.org/spec/latest/chapters/cmdbuffers.html#commandbuffers-pools)
-//
-// Command pools are externally synchronized, meaning that a command pool must
-// not be used concurrently in multiple threads. That includes use via recording
-// commands on any command buffers allocated from the pool, as well as
-// operations that allocate, free, and reset command buffers or the pool itself.
-// It's not possible to record 2 command buffers from the same pool on different
-// threads. Create pool per thread, even for queues from same family.
-struct ThreadCommandPool {
+struct StagingBuffer {
+  VkBuffer buffer;
+  VkDeviceMemory memory;
+  void *mapped;
+  size_t size = 64 * 1024 * 1024; // 64MB per thread
+  size_t offset = 0;              // Current write position
+  //
+  //
+
+  VkBuffer stagingBuffer;
+  VkDeviceMemory stagingBufferMemory;
+  BufferOffsets targetBufferOffsets;
+};
+
+struct TransferWorker {
   VkCommandPool commandPool;
-  std::atomic_bool in_use;
-  // commands resetted each frame, like dynamic draw or transfer from staging to
-  // device buffer
-  std::vector<VkCommandBuffer> transient_commands;
-  // persistent commands, like non immediate gui
-  std::vector<VkCommandBuffer> persistent_commands;
+  std::vector<VkCommandBuffer> commandBuffers;
+  StagingBuffer stagingBuffer;
+  std::array<VkSemaphore, MAX_FRAMES_IN_FLIGHT> transferSemaphores;
 };
 
 class RendererContext {
 
 private:
-  const int MAX_FRAMES_IN_FLIGHT = 2;
   uint32_t currentFrame = 0;
 
   SDL_Window *window;
@@ -115,20 +99,14 @@ private:
   // graphics/compute operations.
   // - VK_QUEUE_GRAPHICS_BIT and VK_QUEUE_COMPUTE_BIT can always implicitly
   // accept VK_QUEUE_TRANSFER_BIT commands.
-  std::array<TransferQueue, NUM_TRANSFER_QUEUES> transfer_queues;
+  VkQueue graphicsQueue;
+  VkQueue presentQueue;
+  VkQueue transferQueue;
 
-  // idea is to asign transfer queue per thread and distribute transfer tasks
-  // between capable threads.
-  TransferQueue *GetAvailableTransferQueue() {
-    for (auto &tq : transfer_queues) {
-      bool expected = false;
-      bool desired = true;
-      if (tq.in_use.compare_exchange_strong(expected, desired)) {
-        return &tq;
-      }
-    }
-    return nullptr;
-  }
+  VkCommandPool drawCommandPool;
+  VkCommandBuffer drawCommandBuffer;
+  std::vector<TransferWorker> transferWorkers;
+  std::array<std::vector<VkSemaphore>, MAX_FRAMES_IN_FLIGHT> transferSemaphores;
 
   VkSwapchainKHR swapChain;
   std::vector<VkImage> swapChainImages;
@@ -142,11 +120,6 @@ private:
 
   std::vector<VkFramebuffer> swapChainFramebuffers;
 
-  // TODO: delete 2 ThreadCommandPool variables. Replace with TransferWorker
-  // alike (Godot)
-  ThreadCommandPool dynamic_draw_commands[NUM_COMMAND_POOLS];
-  ThreadCommandPool transfer_commands[NUM_COMMAND_POOLS];
-
   /* https://developer.nvidia.com/vulkan-memory-management
    * Recommends using same buffer with offsets for vert/ind/uniform.
    *  For Buffer memory we recommend making use of the offset mechanism the API
@@ -155,21 +128,11 @@ private:
    *  buffers, as well as cache misses by using just the same buffer object and
    *  varying the offset.
    */
-
-  // VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, long term infrequent change? (my
-  // system reports 9 gb) textures.
   VkBuffer deviceBuffer;
   VkDeviceMemory deviceBufferMemory;
   BufferOffsets deviceBufferOffsets;
 
-  // TODO: each thread write its own staging buffer with memory_order_release
-  // between frames transfer thread writes to device buffer, reading up to date
-  // staging with memory_order_acquire.
-  // thread id as index to vector with buf id.
-  // task based parallelism, each HW thread will have it
-  VkBuffer stagingBuffer;
-  VkDeviceMemory stagingBufferMemory;
-  BufferOffsets stagingBufferOffsets;
+  QueueFamilyIndices queueFamilyIndices;
 
   VkDebugUtilsMessengerEXT debugMessenger;
 
@@ -200,13 +163,13 @@ public:
   int windowCallback(SDL_Event *e);
   BufferOffsets buffer(MeshLoadData &mesh_load_data) {}
   void postDraw() {
-    for (ThreadCommandPool &p : dynamic_draw_commands) {
-      vkResetCommandPool(device, p.commandPool, NULL);
-    }
-    for (ThreadCommandPool &p : transfer_commands) {
-      vkResetCommandPool(device, p.commandPool, NULL);
+    vkResetCommandPool(device, drawCommandPool, NULL);
+    for (auto &worker : transferWorkers) {
+      vkResetCommandPool(device, worker.commandPool, NULL);
     }
   }
+
+  void destroyStagingBuffer(StagingBuffer &stagingBuffer);
 
 private:
   // for test, to be removed ASAP.
@@ -237,6 +200,19 @@ private:
   void cleanupSwapChain();
   QueueFamilyIndices
   findQueueFamilies(VkPhysicalDevice &physical_device_candidate);
+  void setTransferFamily(std::vector<QueueFamily> &transferFamilies,
+                         std::vector<QueueFamily> &graphicsFamilies,
+                         std::vector<QueueFamily> &computeFamilies,
+                         QueueFamilyIndices &indices);
+  void getTransferQueue(
+      bool &has_transfer, std::vector<QueueFamily>::iterator &transfer_iter,
+      std::vector<QueueFamily> &transferFamilies, bool &has_graphics,
+      std::vector<QueueFamily>::iterator &graphics_iter,
+      std::vector<QueueFamily> &graphicsFamilies, bool &has_compute,
+      std::vector<QueueFamily>::iterator &compute_iter,
+      std::vector<QueueFamily> &computeFamilies, int &transfer_family_index,
+      const int NUM_TRANSFER_QUEUES,
+      std::array<QueueFamily, 1Ui64> &transferFamily, bool &init);
   bool isDeviceSuitable(VkPhysicalDevice &device);
   int rateDeviceSuitability(VkPhysicalDeviceProperties &deviceProperties,
                             VkPhysicalDeviceFeatures &deviceFeatures);
@@ -244,7 +220,7 @@ private:
   void createLogicalDevice();
   void createSurface();
   std::vector<VkDeviceQueueCreateInfo>
-  get_physical_device_queues(QueueFamilyIndices &indices);
+  getPhysicalDeviceQueues(QueueFamilyIndices &indices);
   void createInstance();
   bool checkValidationLayerSupport();
   bool checkDeviceExtensionSupport(VkPhysicalDevice &physical_device_candidate);
@@ -261,9 +237,15 @@ private:
   VkShaderModule createShaderModule(const std::vector<char> &code);
   void createRenderPass();
   void createFramebuffers();
-  void createCommandPool();
-  void createCommandBuffer();
-  void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex);
+  VkCommandPool createCommandPool(VkCommandPoolCreateFlagBits &flags,
+                                  uint32_t queueFamilyIndex);
+  VkCommandPool createCommandPoolTransient(uint32_t queueFamilyIndex);
+  VkCommandPool createCommandPoolPersistent(uint32_t queueFamilyIndex);
+  std::vector<VkCommandBuffer>
+  createCommandBuffer(VkCommandPool commandPool,
+                      int numBuffers = MAX_FRAMES_IN_FLIGHT);
+  void recordCommandBufferDraw(VkCommandBuffer commandBuffer,
+                               uint32_t imageIndex);
   void createSyncObjects();
   void createVertexBuffer();
   void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,

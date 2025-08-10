@@ -1,13 +1,16 @@
 #include "gpu_structs.h"
 #include "renderer_context.h"
+#include "thread_pool.h"
 #include "vw_utils.h"
 #include <SDL.h>
 #include <algorithm>
 #include <cstddef>
 #include <openvdb/tools/VolumeToMesh.h>
 #include <string>
+#include <thread>
 
 RendererContext *rc;
+ThreadPool *thread_pool;
 
 const std::vector<Vertex> vertices = {{{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
                                       {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
@@ -26,6 +29,8 @@ int main(int argc, char *argv[]) {
   auto args_vw = parse_arg(argc, argv);
 
   rc = new RendererContext();
+  // thread_pool = new ThreadPool();
+
   rc->init();
 
   SDL_AddEventWatch(resizeWindowCallback, // &rc

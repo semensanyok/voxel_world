@@ -16,8 +16,22 @@
 #include <vulkan/vulkan_core.h>
 
 void RendererContext::drawFrame() {
+  // wait draw command queue for the frame
   vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE,
                   UINT64_MAX);
+  // wait for transfer queue to finish
+  VkSemaphoreWaitInfo waitInfo;
+  waitInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
+  waitInfo.pNext = NULL;
+  // If VK_SEMAPHORE_WAIT_ANY_BIT is not set, the semaphore wait condition
+  // is that all of the semaphores in VkSemaphoreWaitInfo::pSemaphores have
+  // reached the value specified by the corresponding element of
+  // VkSemaphoreWaitInfo::pValues.
+  waitInfo.flags = 0;
+  auto &frameSemaphores = transferSemaphores[currentFrame];
+  waitInfo.pSemaphores = frameSemaphores.data();
+  waitInfo.semaphoreCount = frameSemaphores.size();
+  vkWaitSemaphores(device, &waitInfo, UINT64_MAX);
   while (windowMinimizedOrHidden || (scr_width == 0 || scr_height == 0)) {
     SDL_WaitEvent(NULL);
   }
@@ -36,8 +50,7 @@ void RendererContext::drawFrame() {
   // Only reset the fence if we are submitting work
   vkResetFences(device, 1, &inFlightFences[currentFrame]);
 
-  recordCommandBuffer(dynamic_draw_commands.commandBuffers[currentFrame],
-                      imageIndex);
+  recordCommandBuffer(drawCommandBuffer, imageIndex);
 
   VkSubmitInfo submitInfo{};
   submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -96,13 +109,15 @@ void RendererContext::init() {
   createInstance();
   createSurface();
   pickPhysicalDevice();
+  queueFamilyIndices = findQueueFamilies(physicalDevice);
   createLogicalDevice();
   createSwapChain();
   createImageViews();
   createRenderPass();
   createGraphicsPipeline();
   createFramebuffers();
-  createCommandPool();
+  drawCommandPool =
+      createCommandPoolTransient(queueFamilyIndices.graphicsFamily->id);
   createVertexBuffer();
   createCommandBuffer();
   createSyncObjects();
@@ -176,8 +191,13 @@ void RendererContext::clear() {
     vkDestroyFence(device, inFlightFences[i], nullptr);
   }
 
-  vkDestroyCommandPool(device, dynamic_draw_commands.commandPool, nullptr);
-  vkDestroyCommandPool(device, transfer_commands.commandPool, nullptr);
+  vkDestroyCommandPool(device, drawCommandPool, nullptr);
+  {
+    for (auto &transfer_commands : transferWorkers) {
+      vkDestroyCommandPool(device, transfer_commands.commandPool, NULL);
+    }
+    transferWorkers.clear();
+  }
 
   vkDestroyDevice(device, nullptr);
 
@@ -225,7 +245,8 @@ VKAPI_ATTR VkBool32 VKAPI_CALL RendererContext::debugCallback(
   case VK_DEBUG_UTILS_MESSAGE_TYPE_FLAG_BITS_MAX_ENUM_EXT:
     type = "FLAG_BITS_MAX_ENUM";
   }
-  std::cerr << severity << ": " << " Vulkan type: " << type
+  std::cerr << severity << ": "
+            << " Vulkan type: " << type
             << " Message: " << pCallbackData->pMessage << std::endl;
   return VK_FALSE;
 }
@@ -348,6 +369,17 @@ QueueFamilyIndices RendererContext::findQueueFamilies(
   }
   // DEFINE TRANSFER QUEUES
   // //////////////////////////////////////////////////////////
+  setTransferFamily(transferFamilies, graphicsFamilies, computeFamilies,
+                    indices);
+  // DEFINE TRANSFER QUEUES END
+  // //////////////////////////////////////////////////
+  return indices;
+}
+
+void RendererContext::setTransferFamily(
+    std::vector<QueueFamily> &transferFamilies,
+    std::vector<QueueFamily> &graphicsFamilies,
+    std::vector<QueueFamily> &computeFamilies, QueueFamilyIndices &indices) {
   int transfer_family_index = 0;
   auto transfer_iter = transferFamilies.begin();
   auto graphics_iter = graphicsFamilies.begin();
@@ -356,6 +388,10 @@ QueueFamilyIndices RendererContext::findQueueFamilies(
   bool has_graphics = false;
   bool has_compute = false;
   bool init = true;
+  // const int NUM_TRANSFER_QUEUES = 2;
+  const int NUM_TRANSFER_QUEUES = 1;
+  std::array<QueueFamily, NUM_TRANSFER_QUEUES> transferFamily;
+  // try find DNA special transfer queue. with fallback.
   while (((has_transfer = (transfer_iter != transferFamilies.end() &&
                            transfer_iter->has_available())) ||
           (has_graphics = (graphics_iter != graphicsFamilies.end() &&
@@ -365,12 +401,15 @@ QueueFamilyIndices RendererContext::findQueueFamilies(
          transfer_family_index < NUM_TRANSFER_QUEUES) {
     if (has_transfer) {
       if (transfer_iter->num_queues <= NUM_TRANSFER_QUEUES) {
-        indices.transferFamily = {*transfer_iter};
+        transferFamily = {*transfer_iter};
         break;
       }
     }
-    QueueFamily &out = indices.transferFamily.at(transfer_family_index);
+    QueueFamily &out = transferFamily.at(transfer_family_index);
     QueueFamily next_c;
+
+    std::array<QueueFamily, NUM_TRANSFER_QUEUES> transferFamily;
+
     if (has_transfer) {
       next_c = *transfer_iter;
       transfer_iter->advance_to_next_queue();
@@ -384,19 +423,19 @@ QueueFamilyIndices RendererContext::findQueueFamilies(
     if (init) {
       out = next_c;
       out.num_queues = 1;
-    } else if (indices.transferFamily[transfer_family_index].id == next_c.id) {
+    } else if (transferFamily[transfer_family_index].id == next_c.id) {
       out.num_queues++;
     } else {
       transfer_family_index++;
       if (transfer_family_index >= NUM_TRANSFER_QUEUES) {
         break;
       }
-      QueueFamily &out2 = indices.transferFamily.at(transfer_family_index);
+      QueueFamily &out2 = transferFamily.at(transfer_family_index);
       out2 = next_c;
       out2.num_queues = 1;
     }
     uint32_t num_queues_res = 0;
-    for (auto &f : indices.transferFamily) {
+    for (auto &f : transferFamily) {
       num_queues_res += f.num_queues;
     }
     if (num_queues_res >= NUM_TRANSFER_QUEUES) {
@@ -404,9 +443,8 @@ QueueFamilyIndices RendererContext::findQueueFamilies(
     }
     init = false;
   }
-  // DEFINE TRANSFER QUEUES END
-  // //////////////////////////////////////////////////
-  return indices;
+  // refactored to have a single transfer queue
+  indices.transferFamily = {*transferFamily.begin()};
 }
 
 bool RendererContext::isDeviceSuitable(VkPhysicalDevice &device) {
@@ -478,9 +516,10 @@ void RendererContext::pickPhysicalDevice() {
 void RendererContext::createLogicalDevice() {
   VkPhysicalDeviceFeatures deviceFeatures{};
 
-  QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
+  // QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
+  QueueFamilyIndices &indices = queueFamilyIndices;
   std::vector<VkDeviceQueueCreateInfo> queues =
-      get_physical_device_queues(indices);
+      getPhysicalDeviceQueues(indices);
   VkDeviceCreateInfo createInfo{};
   createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
   createInfo.pQueueCreateInfos = queues.data();
@@ -506,12 +545,9 @@ void RendererContext::createLogicalDevice() {
   vkGetDeviceQueue(device, indices.presentFamily.value().id,
                    indices.presentFamily.value().start_queue_num,
                    &presentQueue);
-  for (auto q : transfer_queues) {
-
-    vkGetDeviceQueue(device, indices.presentFamily.value().id,
-                     indices.presentFamily.value().start_queue_num,
-                     &presentQueue);
-  }
+  vkGetDeviceQueue(device, indices.transferFamily.value().id,
+                   indices.transferFamily.value().start_queue_num,
+                   &transferQueue);
 }
 
 void RendererContext::createInstance() {
@@ -605,42 +641,49 @@ void RendererContext::createSurface() {
   }
 }
 std::vector<VkDeviceQueueCreateInfo>
-RendererContext::get_physical_device_queues(QueueFamilyIndices &indices) {
+RendererContext::getPhysicalDeviceQueues(QueueFamilyIndices &indices) {
 
   std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
   float queuePriority = 1.0f;
-  auto graphics_queue = indices.graphicsFamily.value();
-  auto present_queue = indices.presentFamily.value();
-  auto is_graphics_present_same = graphics_queue.id != present_queue.id;
-  int num_transfer_from_graphics_family = 0;
-  int num_transfer_from_present_family = 0;
+  auto &graphics_queue = indices.graphicsFamily.value();
+  auto &present_queue = indices.presentFamily.value();
+  auto &transfer_queue = indices.transferFamily.value();
 
-  for (auto &q : indices.transferFamily) {
-    if (q.id == graphics_queue.id) {
-      num_transfer_from_graphics_family++;
-    } else if (!is_graphics_present_same && q.id == present_queue.id) {
-      num_transfer_from_present_family++;
-    } else {
-      VkDeviceQueueCreateInfo queueCreateInfo{};
-      queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-      queueCreateInfo.queueFamilyIndex = q.id;
-      queueCreateInfo.queueCount = q.num_queues;
-      queueCreateInfo.pQueuePriorities = &queuePriority;
-      queueCreateInfos.push_back(queueCreateInfo);
-    }
-  }
+  // for (auto &q : indices.transferFamily) {
+  //   if (q.id == graphics_queue.id) {
+  //     num_transfer_from_graphics_family++;
+  //   } else if (!is_graphics_present_same && q.id == present_queue.id) {
+  //     num_transfer_from_present_family++;
+  //   } else {
+  //     VkDeviceQueueCreateInfo queueCreateInfo{};
+  //     queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+  //     queueCreateInfo.queueFamilyIndex = q.id;
+  //     queueCreateInfo.queueCount = q.num_queues;
+  //     queueCreateInfo.pQueuePriorities = &queuePriority;
+  //     queueCreateInfos.push_back(queueCreateInfo);
+  //   }
+  // }
+
   VkDeviceQueueCreateInfo queueCreateInfo{};
   queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
   queueCreateInfo.queueFamilyIndex = graphics_queue.id;
-  queueCreateInfo.queueCount = 1 + num_transfer_from_graphics_family;
+  queueCreateInfo.queueCount = 1;
   queueCreateInfo.pQueuePriorities = &queuePriority;
   queueCreateInfos.push_back(queueCreateInfo);
 
-  if (!is_graphics_present_same) {
+  if (graphics_queue.id != present_queue.id) {
     VkDeviceQueueCreateInfo queueCreateInfo{};
     queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
     queueCreateInfo.queueFamilyIndex = present_queue.id;
-    queueCreateInfo.queueCount = 1 + num_transfer_from_present_family;
+    queueCreateInfo.queueCount = 1;
+    queueCreateInfo.pQueuePriorities = &queuePriority;
+    queueCreateInfos.push_back(queueCreateInfo);
+  }
+  if (graphics_queue.id != transfer_queue.id) {
+    VkDeviceQueueCreateInfo queueCreateInfo{};
+    queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+    queueCreateInfo.queueFamilyIndex = indices.transferFamily->id;
+    queueCreateInfo.queueCount = 1;
     queueCreateInfo.pQueuePriorities = &queuePriority;
     queueCreateInfos.push_back(queueCreateInfo);
   }
@@ -1099,64 +1142,61 @@ void RendererContext::createFramebuffers() {
     }
   }
 };
-void RendererContext::createCommandPool() {
-  QueueFamilyIndices queueFamilyIndices = findQueueFamilies(physicalDevice);
-
-  {
-    /*
-     * VK_COMMAND_POOL_CREATE_TRANSIENT_BIT: Hint that command buffers are
-     * rerecorded with new commands very often (may change memory allocation
-     * behavior)
-     * VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT: Allow command
-     * buffers to be rerecorded individually, without this flag they all have to
-     * be reset together
-     */
-    /* https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/performance/command_buffer_usage#resetting-individual-command-buffers
-     * To reset the pool the flag RESET_COMMAND_BUFFER_BIT is not required, and
-     * it is actually better to avoid it since it prevents it from using a
-     * single large allocator for all buffers in the pool thus increasing memory
-     * overhead.
-     * dont set flag since rc->reset resets command pool each frame.
-     *
-     * but what about persistent draws, like UI? another pool?
-     */
-    // poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-    VkCommandPoolCreateInfo poolInfo{};
-    poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-    poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
-    poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily->id;
-    if (vkCreateCommandPool(device, &poolInfo, nullptr,
-                            &dynamic_draw_commands.commandPool) != VK_SUCCESS) {
-      throw std::runtime_error("failed to create command pool!");
-    }
+VkCommandPool
+RendererContext::createCommandPool(VkCommandPoolCreateFlagBits &flags,
+                                   uint32_t queueFamilyIndex) {
+  VkCommandPool commandPool;
+  VkCommandPoolCreateInfo poolInfo{};
+  poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+  poolInfo.flags = flags;
+  poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily->id;
+  if (vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool) !=
+      VK_SUCCESS) {
+    throw std::runtime_error("failed to create command pool!");
   }
-  for (int i = 0; i < queueFamilyIndices.transferFamily.size(); i++) {
-    QueueFamily &thread_queue = queueFamilyIndices.transferFamily.at(i);
-    VkCommandPoolCreateInfo poolInfo{};
-    poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-    poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
-    poolInfo.queueFamilyIndex = thread_queue.id;
-    if (vkCreateCommandPool(device, &poolInfo, nullptr,
-                            &transfer_commands.commandPool) != VK_SUCCESS) {
-      throw std::runtime_error("failed to create command pool!");
-    }
-  }
+  return commandPool;
 }
-void RendererContext::createCommandBuffer() {
-  commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+/**
+ * Use for transfer worksers
+ */
+VkCommandPool
+RendererContext::createCommandPoolTransient(uint32_t queueFamilyIndex) {
+  // Both flags - short-lived AND need individual reset capability
+  // auto flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT |
+  //              VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+
+  // If you reset the whole pool per frame instead
+  auto flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+  createCommandPool(flags, queueFamilyIndex);
+}
+/**
+ * Use for static geometry
+ */
+VkCommandPool
+RendererContext::createCommandPoolPersistent(uint32_t queueFamilyIndex) {
+  auto flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+  // No TRANSIENT_BIT - these command buffers live for many frames
+  createCommandPool(flags, queueFamilyIndex);
+}
+std::vector<VkCommandBuffer>
+RendererContext::createCommandBuffer(VkCommandPool commandPool,
+                                     int numBuffers) {
+  std::vector<VkCommandBuffer> commandBuffers;
+  commandBuffers.resize(numBuffers);
   VkCommandBufferAllocateInfo allocInfo{};
   allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
   allocInfo.commandPool = commandPool;
   allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-  allocInfo.commandBufferCount = MAX_FRAMES_IN_FLIGHT;
+  allocInfo.commandBufferCount = numBuffers;
 
   if (vkAllocateCommandBuffers(device, &allocInfo, commandBuffers.data()) !=
       VK_SUCCESS) {
     throw std::runtime_error("failed to allocate command buffers!");
   }
+  return commandBuffers;
 }
-void RendererContext::recordCommandBuffer(VkCommandBuffer commandBuffer,
-                                          uint32_t imageIndex) {
+void RendererContext::recordCommandBufferDraw(VkCommandBuffer commandBuffer,
+                                              uint32_t imageIndex) {
   VkCommandBufferBeginInfo beginInfo{};
   beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
   beginInfo.flags = 0;                  // Optional
@@ -1213,12 +1253,31 @@ void RendererContext::createSyncObjects() {
   renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
   inFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
 
-  VkSemaphoreCreateInfo semaphoreInfo{};
-  semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+  // Vulkan 1.2 timeline semaphore - host/gpu synchronization combined.
+  // While some inconvenient limitations in the API remain, the timeline
+  // semaphore programming model should greatly reduce the need for host-side
+  // synchronization and the number of synchronization objects Vulkan
+  // applications are required to track, thereby reducing host-side stalls and
+  // application complexity, which should in turn increase performance and
+  // quality. As such,
+  // !!! the Vulkan working group highly encourages all developers to make the
+  // switch to timeline semaphores for all coarse-grained
+  // https://www.khronos.org/blog/vulkan-timeline-semaphores
 
   VkFenceCreateInfo fenceInfo{};
   fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
   fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+
+  VkSemaphoreTypeCreateInfo timelineCreateInfo;
+  timelineCreateInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
+  timelineCreateInfo.pNext = NULL;
+  timelineCreateInfo.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+  timelineCreateInfo.initialValue = 0;
+
+  VkSemaphoreCreateInfo semaphoreInfo{};
+  semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+  semaphoreInfo.pNext = &timelineCreateInfo;
+  semaphoreInfo.flags = 0;
 
   for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
     if (vkCreateSemaphore(device, &semaphoreInfo, nullptr,
@@ -1248,7 +1307,7 @@ void RendererContext::cleanupSwapChain() {
   }
   vkDestroySwapchainKHR(device, swapChain, nullptr);
 }
-void RendererContext::createVertexBuffer() {
+void RendererContext::createStagingBuffer(size_t bufferSize) {
   size_t bufferSize = sizeof(vertices[0]) * vertices.size();
   createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
@@ -1260,6 +1319,15 @@ void RendererContext::createVertexBuffer() {
     memcpy(data, vertices.data(), (size_t)bufferSize);
     vkUnmapMemory(device, stagingBufferMemory);
   }
+}
+// Keep mapped for the entire lifetime of the buffer
+// Unmap only when destroying the buffer
+void RendererContext::destroyStagingBuffer(StagingBuffer &stagingBuffer) {
+  vkUnmapMemory(device, staging.memory); // Only unmap here
+  vkDestroyBuffer(device, staging.buffer, nullptr);
+  vkFreeMemory(device, staging.memory, nullptr);
+}
+void RendererContext::createVertexBuffer() {
   createBuffer(
       bufferSize,
       VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
@@ -1355,3 +1423,4 @@ void RendererContext::copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer,
   vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
   vkQueueWaitIdle(graphicsQueue);
   vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
+}

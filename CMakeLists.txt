@@ -19,6 +19,12 @@ project(voxel_world VERSION 0.1.0 LANGUAGES C CXX)
 #       add_compile_options(/std:c++latest)
 #       add_compile_options(-std:c++23)
 #   '''
+#   P.S. clangd config priority: workdir .clangd ; user global config.
+#     Example: setup spp standart
+#     ```.clangd or Windows: C:\Users\username\AppData\Local\clangd\config.yaml Linux: ~/.config/clangd/config.yaml
+#     CompileFlags:                     # Tweak the parse settings
+#       Add: [-std=c++20]
+#     ```
 set(CMAKE_CXX_STANDARD 20)
 
 # mysterious advice given by MSVC compiler. somehow windows specific.
