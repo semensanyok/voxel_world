@@ -27,6 +27,8 @@ void RendererContext::drawFrame() {
   // is that all of the semaphores in VkSemaphoreWaitInfo::pSemaphores have
   // reached the value specified by the corresponding element of
   // VkSemaphoreWaitInfo::pValues.
+
+  // 1. Wait for transfer queues to finish
   waitInfo.flags = 0;
   auto &frameSemaphores = transferSemaphores[currentFrame];
   waitInfo.pSemaphores = frameSemaphores.data();
@@ -35,6 +37,14 @@ void RendererContext::drawFrame() {
   while (windowMinimizedOrHidden || (scr_width == 0 || scr_height == 0)) {
     SDL_WaitEvent(NULL);
   }
+  // 2. Start next frame's octree gathering (async)
+  startOctreeGathering(nextFrame);
+  // 3. GPU compute culling (uses data uploaded last frame)
+  vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                    cullPipeline);
+  vkCmdDispatch(commandBuffer, workGroups, 1, 1);
+
+  // TODO: after transfer queus finished, do GPU compute occlusion culling
   uint32_t imageIndex;
   VkResult result = vkAcquireNextImageKHR(
       device, swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame],
@@ -118,7 +128,7 @@ void RendererContext::init() {
   createFramebuffers();
   drawCommandPool =
       createCommandPoolTransient(queueFamilyIndices.graphicsFamily->id);
-  createVertexBuffer();
+  createDrawBuffer();
   createCommandBuffer();
   createSyncObjects();
 }
@@ -182,9 +192,14 @@ void RendererContext::clear() {
   vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
   vkDestroyRenderPass(device, renderPass, nullptr);
 
+  vkDestroyPipeline(device, computePipeline, nullptr);
+  vkDestroyPipelineLayout(device, computePipelineLayout, nullptr);
+
   vkDestroyBuffer(device, deviceBuffer, nullptr);
   vkFreeMemory(device, deviceBufferMemory, nullptr);
 
+  vkDestroyBuffer(device, computeBuffer, nullptr);
+  vkFreeMemory(device, computeBufferMemory, nullptr);
   for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
     vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
     vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
@@ -192,6 +207,7 @@ void RendererContext::clear() {
   }
 
   vkDestroyCommandPool(device, drawCommandPool, nullptr);
+  vkDestroyCommandPool(device, computeCommandPool, nullptr);
   {
     for (auto &transfer_commands : transferWorkers) {
       vkDestroyCommandPool(device, transfer_commands.commandPool, NULL);
@@ -548,6 +564,9 @@ void RendererContext::createLogicalDevice() {
   vkGetDeviceQueue(device, indices.transferFamily.value().id,
                    indices.transferFamily.value().start_queue_num,
                    &transferQueue);
+  vkGetDeviceQueue(device, indices.computeFamily.value().id,
+                   indices.computeFamily.value().start_queue_num,
+                   &computeQueue);
 }
 
 void RendererContext::createInstance() {
@@ -1075,6 +1094,31 @@ void RendererContext::createGraphicsPipeline() {
 
   vkDestroyShaderModule(device, fragShaderModule, nullptr);
   vkDestroyShaderModule(device, vertShaderModule, nullptr);
+}
+void RendererContext::createComputePipeline() {
+  auto shaderCode = readShaderFile("shader_comp.spv");
+  VkShaderModule shaderModule = createShaderModule(shaderCode);
+  VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
+  pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+  pipelineLayoutInfo.setLayoutCount = 0;            // Optional
+  pipelineLayoutInfo.pSetLayouts = nullptr;         // Optional
+  pipelineLayoutInfo.pushConstantRangeCount = 0;    // Optional
+  pipelineLayoutInfo.pPushConstantRanges = nullptr; // Optional
+  if (vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr,
+                             &computePipelineLayout) != VK_SUCCESS) {
+    throw std::runtime_error("failed to create pipeline layout!");
+  }
+  // Compute pipeline (compute shader for culling)
+  VkComputePipelineCreateInfo computePipelineInfo = {
+      .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+      .stage = {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .stage = VK_SHADER_STAGE_COMPUTE_BIT,
+                .module = shaderModule,
+                .pName = "main"},
+      .layout = computePipelineLayout};
+  vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &computePipelineInfo,
+                           NULL, &computePipeline);
+  vkDestroyShaderModule(device, shaderModule, nullptr);
 };
 void RendererContext::createRenderPass() {
   VkAttachmentDescription colorAttachment{};
@@ -1307,36 +1351,39 @@ void RendererContext::cleanupSwapChain() {
   }
   vkDestroySwapchainKHR(device, swapChain, nullptr);
 }
-void RendererContext::createStagingBuffer(size_t bufferSize) {
-  size_t bufferSize = sizeof(vertices[0]) * vertices.size();
-  createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+StagingBuffer* RendererContext::createStagingBuffer() {
+  StagingBuffer *stagingBuffer = new StagingBuffer();
+  stagingBuffer->buffer = VK_NULL_HANDLE;
+  stagingBuffer->memory = VK_NULL_HANDLE;
+
+  createBuffer(BufferSettings::STAGING_BUFFER_SIZE, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                    VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-               stagingBuffer, stagingBufferMemory);
-  {
-    void *data;
-    vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
-    memcpy(data, vertices.data(), (size_t)bufferSize);
-    vkUnmapMemory(device, stagingBufferMemory);
-  }
+               stagingBuffer->buffer, stagingBuffer->memory);
+  vkMapMemory(device, stagingBuffer->memory, 0, BufferSettings::STAGING_BUFFER_SIZE, 0,
+              &stagingBuffer->data);
+  return stagingBuffer;
 }
 // Keep mapped for the entire lifetime of the buffer
 // Unmap only when destroying the buffer
-void RendererContext::destroyStagingBuffer(StagingBuffer &stagingBuffer) {
-  vkUnmapMemory(device, staging.memory); // Only unmap here
-  vkDestroyBuffer(device, staging.buffer, nullptr);
-  vkFreeMemory(device, staging.memory, nullptr);
+void RendererContext::destroyStagingBuffer(StagingBuffer *staging) {
+  vkUnmapMemory(device, staging->memory); // Only unmap here
+  vkDestroyBuffer(device, staging->buffer, nullptr);
+  vkFreeMemory(device, staging->memory, nullptr);
 }
-void RendererContext::createVertexBuffer() {
+void RendererContext::createDrawBuffer() {
   createBuffer(
-      bufferSize,
+      BufferSettings::DRAW_BUFFER_SIZE,
       VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
           VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, deviceBuffer, deviceBufferMemory);
-  copyBuffer(stagingBuffer, deviceBuffer, bufferSize);
-
-  vkDestroyBuffer(device, stagingBuffer, nullptr);
-  vkFreeMemory(device, stagingBufferMemory, nullptr);
+}
+void RendererContext::createComputeBuffer() {
+    createBuffer(
+      BufferSettings::COMPUTE_BUFFER_SIZE,
+      VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+          VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, computeBuffer, computeBufferMemory);
 }
 uint32_t RendererContext::findMemoryType(uint32_t typeFilter,
                                          VkMemoryPropertyFlags properties) {
@@ -1381,6 +1428,7 @@ void RendererContext::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
 
   vkBindBufferMemory(device, buffer, bufferMemory, 0);
 }
+// TODO: completely refactor, use transfer queue and command pool, multithread
 void RendererContext::copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer,
                                  VkDeviceSize size) {
   VkCommandBufferAllocateInfo allocInfo{};
