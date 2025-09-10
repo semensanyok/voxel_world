@@ -1,27 +1,126 @@
-layout (local_size_x = 256) in;
+// cull.comp - GPU culling compute shader with AABB frustum culling
+#version 450
 
-layout(set = 0, binding = 0) uniform Config{
-    mat4 transform;
-    int matrixCount;
-} opData;
+layout(local_size_x = 64) in;
 
-layout(set = 0, binding = 1) readonly buffer  InputBuffer{
-    mat4 matrices[];
-} sourceData;
-
-layout(set = 0, binding = 2) buffer  OutputBuffer{
-    mat4 matrices[];
-} outputData;
+struct ObjectData {
+    mat4 modelMatrix;
+    vec3 aabbMin;        // Local space AABB min
+    vec3 aabbMax;        // Local space AABB max
+    uint materialID;
+    uint objectId; // index of base instance for the DrawCommand drawCommands[] array; 
+};
 
 
-void main()
-{
-    //grab global ID
-	uint gID = gl_GlobalInvocationID.x;
-    //make sure we don't access past the buffer size
-    if(gID < matrixCount)
-    {
-        // do math
-        outputData.matrices[gID] = sourceData.matrices[gID] * opData.transform;
+
+struct DrawCommand {
+    uint indexCount;
+    uint instanceCount;
+    uint firstIndex;
+    int vertexOffset;
+    uint firstInstance;
+};
+
+// Input object data
+layout(set = 0, binding = 0) readonly buffer ObjectBuffer {
+    ObjectData objects[];
+};
+
+// Output indirect draw commands
+layout(set = 0, binding = 1) writeonly buffer IndirectBuffer {
+    DrawCommand drawCommands[];
+};
+
+// Atomic counter for visible objects (indexed by materialID)
+layout(set = 0, binding = 2) buffer CountBuffer {
+    uint visibleCount[];
+};
+
+// Camera data
+layout(set = 0, binding = 3) uniform CameraUBO {
+    mat4 viewProj;
+    vec4 frustumPlanes[6]; // ax + by + cz + d = 0 format
+} camera;
+
+// Additional data per mesh type (indexed by materialID)
+layout(set = 0, binding = 4) readonly buffer MeshDataBuffer {
+    struct {
+        uint indexCount;
+        uint firstIndex;
+        int vertexOffset;
+    } meshData[];
+};
+layout(set = 0, binding = 5) writeonly buffer InstancesBuffer {
+    uint instanceIds[]; // object IDs of visible instances
+}
+// Transform AABB from local to world space
+void transformAABB(mat4 transform, vec3 localMin, vec3 localMax, 
+                   out vec3 worldMin, out vec3 worldMax) {
+    // Start with translation component
+    vec3 center = (transform * vec4((localMin + localMax) * 0.5, 1.0)).xyz;
+    
+    // Extract transformed axis vectors and their absolute values
+    vec3 extents = (localMax - localMin) * 0.5;
+    vec3 axisX = abs(transform[0].xyz) * extents.x;
+    vec3 axisY = abs(transform[1].xyz) * extents.y;
+    vec3 axisZ = abs(transform[2].xyz) * extents.z;
+    
+    // Compute world space extents
+    vec3 worldExtents = axisX + axisY + axisZ;
+    
+    worldMin = center - worldExtents;
+    worldMax = center + worldExtents;
+}
+
+// AABB vs frustum intersection test
+bool frustumCullAABB(vec3 aabbMin, vec3 aabbMax) {
+    for (int i = 0; i < 6; i++) {
+        vec4 plane = camera.frustumPlanes[i];
+        vec3 normal = plane.xyz;
+        
+        // Find the positive vertex (farthest along plane normal)
+        vec3 positiveVertex = mix(aabbMin, aabbMax, greaterThan(normal, vec3(0.0)));
+        
+        // If positive vertex is behind plane, AABB is completely outside
+        if (dot(plane.xyz, positiveVertex) + plane.w < 0.0) {
+            return true; // Outside frustum
+        }
+    }
+    return false; // Inside or intersecting frustum
+}
+
+void main() {
+    uint objectIndex = gl_GlobalInvocationID.x;
+    uint objectID = objects[objectIndex].objectId;
+    if (objectIndex >= objects.length()) return;
+    
+    ObjectData obj = objects[objectIndex];
+    
+    // Transform AABB to world space
+    vec3 worldMin, worldMax;
+    transformAABB(obj.modelMatrix, obj.aabbMin, obj.aabbMax, worldMin, worldMax);
+    
+    // Frustum culling with world space AABB
+    if (!frustumCullAABB(worldMin, worldMax)) {
+        // TODO: after distance culling we store all DrawCommand per material and dont need to increment count buffer.
+        // each instanced draw which is culled just have instanceCount == 0
+        // right ???
+        // Object is visible, add draw command
+        uint instanceNum = atomicAdd(drawCommands[objectID].instanceCount, 1);
+        instanceIndex = drawCommands[objectID].firstInstance + instanceNum;
+        visibleInstances.instanceIds[instanceIndex] = objectID;
+        bool isFirstInstance = instanceNum == 1;
+        if (isFirstInstance) {
+          // Get mesh data for this object type
+          uint materialID = obj.materialID;
+          drawCommands[objectID].indexCount = meshData[materialID].indexCount;
+          // At the start of the compute shader, the drawBuffer has all the draw data for vertex count and instance count, 
+          // but instanceCount is set to 0. 
+          // The compute shader does an atomic +1 to it, and uses it to “reserve” a slot, 
+          // which it then stores in the finalInstanceBuffer. 
+          drawCommands[objectID].firstIndex = meshData[materialID].firstIndex;
+          drawCommands[objectID].vertexOffset = meshData[materialID].vertexOffset;
+          drawCommands[objectID].firstInstance = objectIndex; // For accessing ObjectData in vertex shader
+        }
     }
 }

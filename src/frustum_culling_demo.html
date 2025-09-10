@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Frustum Culling Demo</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background: #1a1a1a;
+            color: white;
+            font-family: Arial, sans-serif;
+        }
+        canvas {
+            border: 2px solid #444;
+            background: #000;
+        }
+        .controls {
+            margin-top: 10px;
+            display: flex;
+            gap: 20px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .status {
+            margin-top: 10px;
+            padding: 10px;
+            background: #333;
+            border-radius: 5px;
+        }
+        label {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>3D Frustum Culling with AABB</h1>
+    <canvas id="canvas" width="800" height="600"></canvas>
+    <div class="controls">
+        <label>Box X: <input type="range" id="boxX" min="-5" max="5" step="0.1" value="0"></label>
+        <label>Box Y: <input type="range" id="boxY" min="-3" max="3" step="0.1" value="0"></label>
+        <label>Box Z: <input type="range" id="boxZ" min="-10" max="-1" step="0.1" value="-5"></label>
+        <label>Camera X: <input type="range" id="camX" min="-5" max="5" step="0.1" value="0"></label>
+        <label>Camera Y: <input type="range" id="camY" min="-3" max="0" step="0.1" value="1"></label>
+        <label>Camera Z: <input type="range" id="camZ" min="1" max="8" step="0.1" value="1"></label>
+        <label>FOV: <input type="range" id="fov" min="30" max="120" step="5" value="60"></label>
+    </div>
+    <div class="status" id="status">Loading...</div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const gl = canvas.getContext('webgl');
+
+        if (!gl) {
+            alert('WebGL not supported');
+        }
+
+        // Vertex shader
+        const vertexShaderSource = `
+            attribute vec3 a_position;
+            uniform mat4 u_mvpMatrix;
+            void main() {
+                gl_Position = u_mvpMatrix * vec4(a_position, 1.0);
+            }
+        `;
+
+        // Fragment shader
+        const fragmentShaderSource = `
+            precision mediump float;
+            uniform vec3 u_color;
+            void main() {
+                gl_FragColor = vec4(u_color, 1.0);
+            }
+        `;
+
+        function createShader(gl, type, source) {
+            const shader = gl.createShader(type);
+            gl.shaderSource(shader, source);
+            gl.compileShader(shader);
+            
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                console.error('Shader compile error:', gl.getShaderInfoLog(shader));
+                return null;
+            }
+            return shader;
+        }
+
+        function createProgram(gl, vertexShader, fragmentShader) {
+            const program = gl.createProgram();
+            gl.attachShader(program, vertexShader);
+            gl.attachShader(program, fragmentShader);
+            gl.linkProgram(program);
+            
+            if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+                console.error('Program link error:', gl.getProgramInfoLog(program));
+                return null;
+            }
+            return program;
+        }
+
+        // Matrix math functions
+        function multiply4x4(a, b) {
+            const result = new Float32Array(16);
+            for (let i = 0; i < 4; i++) {
+                for (let j = 0; j < 4; j++) {
+                    result[i * 4 + j] = 0;
+                    for (let k = 0; k < 4; k++) {
+                        result[i * 4 + j] += a[i * 4 + k] * b[k * 4 + j];
+                    }
+                }
+            }
+            return result;
+        }
+
+        function perspective(fovY, aspect, near, far) {
+            const f = 1.0 / Math.tan(fovY / 2);
+            const nf = 1 / (near - far);
+            return new Float32Array([
+                f / aspect, 0, 0, 0,
+                0, f, 0, 0,
+                0, 0, (far + near) * nf, -1,
+                0, 0, (2 * far * near) * nf, 0
+            ]);
+        }
+
+        function lookAt(eye, target, up) {
+            const zAxis = normalize([eye[0] - target[0], eye[1] - target[1], eye[2] - target[2]]);
+            const xAxis = normalize(cross(up, zAxis));
+            const yAxis = cross(zAxis, xAxis);
+
+            return new Float32Array([
+                xAxis[0], yAxis[0], zAxis[0], 0,
+                xAxis[1], yAxis[1], zAxis[1], 0,
+                xAxis[2], yAxis[2], zAxis[2], 0,
+                -dot(xAxis, eye), -dot(yAxis, eye), -dot(zAxis, eye), 1
+            ]);
+        }
+
+        function normalize(v) {
+            const len = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+            return len > 0 ? [v[0] / len, v[1] / len, v[2] / len] : [0, 0, 0];
+        }
+
+        function cross(a, b) {
+            return [
+                a[1] * b[2] - a[2] * b[1],
+                a[2] * b[0] - a[0] * b[2],
+                a[0] * b[1] - a[1] * b[0]
+            ];
+        }
+
+        function dot(a, b) {
+            return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        }
+
+        // Extract frustum planes from MVP matrix
+        function extractFrustumPlanes(mvpMatrix) {
+            const planes = [];
+            const m = mvpMatrix;
+
+            // Left plane
+            planes.push([
+                m[3] + m[0],
+                m[7] + m[4],
+                m[11] + m[8],
+                m[15] + m[12]
+            ]);
+
+            // Right plane
+            planes.push([
+                m[3] - m[0],
+                m[7] - m[4],
+                m[11] - m[8],
+                m[15] - m[12]
+            ]);
+
+            // Bottom plane
+            planes.push([
+                m[3] + m[1],
+                m[7] + m[5],
+                m[11] + m[9],
+                m[15] + m[13]
+            ]);
+
+            // Top plane
+            planes.push([
+                m[3] - m[1],
+                m[7] - m[5],
+                m[11] - m[9],
+                m[15] - m[13]
+            ]);
+
+            // Near plane
+            planes.push([
+                m[3] + m[2],
+                m[7] + m[6],
+                m[11] + m[10],
+                m[15] + m[14]
+            ]);
+
+            // Far plane
+            planes.push([
+                m[3] - m[2],
+                m[7] - m[6],
+                m[11] - m[10],
+                m[15] - m[14]
+            ]);
+
+            // Normalize planes
+            return planes.map(plane => {
+                const len = Math.sqrt(plane[0] * plane[0] + plane[1] * plane[1] + plane[2] * plane[2]);
+                return [plane[0] / len, plane[1] / len, plane[2] / len, plane[3] / len];
+            });
+        }
+
+        // Your frustum culling function adapted to JavaScript
+        function frustumCullAABB(aabbMin, aabbMax, frustumPlanes) {
+            for (let i = 0; i < 6; i++) {
+                const plane = frustumPlanes[i];
+                const normal = [plane[0], plane[1], plane[2]];
+                
+                // Find the positive vertex (farthest along plane normal)
+                const positiveVertex = [
+                    normal[0] > 0 ? aabbMax[0] : aabbMin[0],
+                    normal[1] > 0 ? aabbMax[1] : aabbMin[1],
+                    normal[2] > 0 ? aabbMax[2] : aabbMin[2]
+                ];
+                
+                // If positive vertex is behind plane, AABB is completely outside
+                if (dot(normal, positiveVertex) + plane[3] < 0.0) {
+                    return true; // Outside frustum (culled)
+                }
+            }
+            return false; // Inside or intersecting frustum
+        }
+
+        // Create wireframe box vertices
+        function createBoxWireframe(minX, minY, minZ, maxX, maxY, maxZ) {
+            return new Float32Array([
+                // Bottom face
+                minX, minY, minZ,  maxX, minY, minZ,
+                maxX, minY, minZ,  maxX, minY, maxZ,
+                maxX, minY, maxZ,  minX, minY, maxZ,
+                minX, minY, maxZ,  minX, minY, minZ,
+                // Top face
+                minX, maxY, minZ,  maxX, maxY, minZ,
+                maxX, maxY, minZ,  maxX, maxY, maxZ,
+                maxX, maxY, maxZ,  minX, maxY, maxZ,
+                minX, maxY, maxZ,  minX, maxY, minZ,
+                // Vertical edges
+                minX, minY, minZ,  minX, maxY, minZ,
+                maxX, minY, minZ,  maxX, maxY, minZ,
+                maxX, minY, maxZ,  maxX, maxY, maxZ,
+                minX, minY, maxZ,  minX, maxY, maxZ
+            ]);
+        }
+
+        // Create frustum wireframe
+        function createFrustumWireframe(fov, aspect, near, far) {
+            const tanHalfFov = Math.tan((fov * Math.PI / 180) * 0.5);
+            const nearHeight = near * tanHalfFov;
+            const nearWidth = nearHeight * aspect;
+            const farHeight = far * tanHalfFov;
+            const farWidth = farHeight * aspect;
+
+            return new Float32Array([
+                // Near plane
+                -nearWidth, -nearHeight, -near,  nearWidth, -nearHeight, -near,
+                 nearWidth, -nearHeight, -near,  nearWidth,  nearHeight, -near,
+                 nearWidth,  nearHeight, -near, -nearWidth,  nearHeight, -near,
+                -nearWidth,  nearHeight, -near, -nearWidth, -nearHeight, -near,
+                // Far plane
+                -farWidth, -farHeight, -far,  farWidth, -farHeight, -far,
+                 farWidth, -farHeight, -far,  farWidth,  farHeight, -far,
+                 farWidth,  farHeight, -far, -farWidth,  farHeight, -far,
+                -farWidth,  farHeight, -far, -farWidth, -farHeight, -far,
+                // Connecting lines
+                -nearWidth, -nearHeight, -near, -farWidth, -farHeight, -far,
+                 nearWidth, -nearHeight, -near,  farWidth, -farHeight, -far,
+                 nearWidth,  nearHeight, -near,  farWidth,  farHeight, -far,
+                -nearWidth,  nearHeight, -near, -farWidth,  farHeight, -far
+            ]);
+        }
+
+        // Initialize WebGL
+        const vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexShaderSource);
+        const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSource);
+        const program = createProgram(gl, vertexShader, fragmentShader);
+
+        const positionLocation = gl.getAttribLocation(program, 'a_position');
+        const mvpLocation = gl.getUniformLocation(program, 'u_mvpMatrix');
+        const colorLocation = gl.getUniformLocation(program, 'u_color');
+
+        // Create buffers
+        const boxBuffer = gl.createBuffer();
+        const frustumBuffer = gl.createBuffer();
+
+        function render() {
+            const boxX = parseFloat(document.getElementById('boxX').value);
+            const boxY = parseFloat(document.getElementById('boxY').value);
+            const boxZ = parseFloat(document.getElementById('boxZ').value);
+            const camX = parseFloat(document.getElementById('camX').value);
+            const camY = parseFloat(document.getElementById('camY').value);
+            const camZ = parseFloat(document.getElementById('camZ').value);
+            const fov = parseFloat(document.getElementById('fov').value);
+
+            gl.viewport(0, 0, canvas.width, canvas.height);
+            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+            gl.enable(gl.DEPTH_TEST);
+            gl.useProgram(program);
+
+            // Camera matrices
+            const aspect = canvas.width / canvas.height;
+            const projMatrix = perspective(fov * Math.PI / 180, aspect, 0.1, 20.0);
+            const viewMatrix = lookAt([camX, camY, camZ], [0, 0, -5], [0, 1, 0]);
+            const mvpMatrix = multiply4x4(projMatrix, viewMatrix);
+
+            // Extract frustum planes using your method
+            const frustumPlanes = extractFrustumPlanes(mvpMatrix);
+
+            // Render frustum wireframe
+            const frustumVertices = createFrustumWireframe(fov, aspect, 0.1, 20.0);
+            gl.bindBuffer(gl.ARRAY_BUFFER, frustumBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, frustumVertices, gl.STATIC_DRAW);
+            
+            gl.vertexAttribPointer(positionLocation, 3, gl.FLOAT, false, 0, 0);
+            gl.enableVertexAttribArray(positionLocation);
+            
+            gl.uniformMatrix4fv(mvpLocation, false, mvpMatrix);
+            gl.uniform3f(colorLocation, 0.0, 1.0, 1.0); // Cyan frustum
+            gl.drawArrays(gl.LINES, 0, frustumVertices.length / 3);
+
+            // Test AABB
+            const aabbMin = [boxX - 0.5, boxY - 0.5, boxZ - 0.5];
+            const aabbMax = [boxX + 0.5, boxY + 0.5, boxZ + 0.5];
+            
+            // Use your frustum culling function
+            const isCulled = frustumCullAABB(aabbMin, aabbMax, frustumPlanes);
+            
+            // Render AABB
+            const boxVertices = createBoxWireframe(...aabbMin, ...aabbMax);
+            gl.bindBuffer(gl.ARRAY_BUFFER, boxBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, boxVertices, gl.STATIC_DRAW);
+            
+            gl.vertexAttribPointer(positionLocation, 3, gl.FLOAT, false, 0, 0);
+            gl.enableVertexAttribArray(positionLocation);
+            
+            // Color based on culling result
+            if (isCulled) {
+                gl.uniform3f(colorLocation, 1.0, 0.0, 0.0); // Red = culled
+            } else {
+                gl.uniform3f(colorLocation, 0.0, 1.0, 0.0); // Green = visible
+            }
+            
+            gl.drawArrays(gl.LINES, 0, boxVertices.length / 3);
+
+            // Update status
+            document.getElementById('status').textContent = 
+                `AABB: ${isCulled ? 'CULLED (Outside)' : 'VISIBLE (Inside/Intersecting)'} | ` +
+                `Box: (${boxX.toFixed(1)}, ${boxY.toFixed(1)}, ${boxZ.toFixed(1)}) | ` +
+                `Camera: (${camX.toFixed(1)}, ${camY.toFixed(1)}, ${camZ.toFixed(1)}) | FOV: ${fov}°`;
+        }
+
+        // Setup
+        gl.clearColor(0.0, 0.0, 0.0, 1.0);
+
+        // Event listeners
+        ['boxX', 'boxY', 'boxZ', 'camX', 'camY', 'camZ', 'fov'].forEach(id => {
+            document.getElementById(id).addEventListener('input', render);
+        });
+
+        // Initial render
+        render();
+    </script>
+</body>
+</html>
