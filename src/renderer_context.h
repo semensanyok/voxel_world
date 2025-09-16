@@ -138,12 +138,8 @@ private:
    *  buffers, as well as cache misses by using just the same buffer object and
    *  varying the offset.
    */
-  VkBuffer deviceBuffer;
-  VkDeviceMemory deviceBufferMemory;
-  BufferOffsets deviceBufferOffsets;
 
-  VkBuffer computeBuffer;
-  VkDeviceMemory computeBufferMemory;
+  BufferLayout bufferLayout;
 
   QueueFamilyIndices queueFamilyIndices;
 
@@ -262,8 +258,7 @@ private:
   void recordCommandBufferDraw(VkCommandBuffer commandBuffer,
                                uint32_t imageIndex);
   void createSyncObjects();
-  void createDrawBuffer();
-  void createComputeBuffer();
+  void createBufferLayout();
   void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
                     VkMemoryPropertyFlags properties, VkBuffer &buffer,
                     VkDeviceMemory &bufferMemory);

@@ -98,3 +98,113 @@ You're building a high-performance engine from scratch
 The complexity cost is acceptable
 
 Recommendation: Start with Godot's simpler approach. Profile transfer queue contention. Only add multiple queues if you can measure the bottleneck. The NVIDIA guide emphasizes batching over multiple queues anyway.
+
+
+# so... broad phase culling -> dispatch transfer vertex / index -> frustum culling on GPU via compute shader. Or what is the best practice?
+
+You're on the right track! Here's the modern best practice pipeline for large-scale rendering:
+Optimal Culling & Rendering Pipeline
+Frame N Timeline:
+CPU Thread 1 (Main):     CPU Thread 2 (Async):    GPU:
+├─ Broad Phase Cull      ├─ Upload Frame N+1       ├─ Frustum Cull (Compute)
+├─ Prepare Upload        │  - New Vertices         ├─ Render Frame N-1  
+├─ Submit GPU Work       │  - Updated Transforms   │
+└─ Begin Frame N+1       └─ Stage Next Frame       └─ PresentCPU Thread 1 (Main):     CPU Thread 2 (Async):    GPU:
+├─ Broad Phase Cull      ├─ Upload Frame N+1       ├─ Frustum Cull (Compute)
+├─ Prepare Upload        │  - New Vertices         ├─ Render Frame N-1  
+├─ Submit GPU Work       │  - Updated Transforms   │
+└─ Begin Frame N+1       └─ Stage Next Frame       └─ Present
+
+Recommended Hybrid Approach:
+For Most Applications:
+cvoid hybridPipeline() {
+    // 1. CPU broad phase (coarse, fast)
+    //    - Spatial queries (octree/BVH)  
+    //    - Rough distance/angle checks
+    //    - Material grouping
+    broadPhaseCull();                    // ~1000s → ~100s objects
+    
+    // 2. Upload only broad-phase survivors
+    asyncUploadVisible();                // Transfer reduced set
+    
+    // 3. GPU fine culling (accurate, parallel)
+    //    - Per-pixel accurate frustum tests
+    //    - Sub-pixel culling
+    //    - Occlusion queries
+    gpuFineCulling();                    // ~100s → ~50s objects
+    
+    // 4. Render survivors
+    renderIndirect();
+}
+
+
+Detailed Pipeline:
+1. Broad Phase Culling (CPU)
+```c
+c// Thread 1: Octree/spatial queries
+void broadPhaseCull() {
+    visibleObjects.clear();
+    
+    // Your octree traversal
+    octree.query(cameraFrustum, [&](ObjectID obj) {
+        // Coarse rejection - just AABB vs frustum planes
+        if (coarseIntersect(objects[obj].worldAABB, frustum)) {
+            visibleObjects.push_back(obj);
+        }
+    });
+    
+    // Sort by material for batching
+    std::sort(visibleObjects.begin(), visibleObjects.end(), 
+             [](const ObjectID& a, const ObjectID& b) {
+                 return objects[a].materialID < objects[b].materialID;
+             });
+}
+```
+2. Async Transfer (CPU Thread 2)
+```c
+// Thread 2: Upload new/updated data
+void asyncUpload() {
+    // Upload new geometry discovered in broad phase
+    for (ObjectID obj : newlyVisibleObjects) {
+        if (!isGeometryUploaded(obj)) {
+            stageGeometryUpload(obj);  // Queue for transfer
+        }
+    }
+    
+    // Update dynamic transforms
+    updateObjectTransforms();
+    
+    // Submit transfer commands
+    vkQueueSubmit(transferQueue, 1, &transferSubmit, transferFence);
+}
+```
+3. GPU Fine Culling (Compute Shader)
+```c
+void gpuCulling() {
+    // Wait for transfers to complete
+    vkWaitForFences(device, 1, &transferFence, VK_TRUE, UINT64_MAX);
+    
+    vkBeginCommandBuffer(computeCmd, &beginInfo);
+    
+    // Per-material culling passes
+    for (const MaterialBatch& material : materialBatches) {
+        // Reset count for this material
+        vkCmdFillBuffer(computeCmd, countBuffer, 
+                       material.countOffset * 4, 4, 0);
+        
+        // Push constants: material ID + output offset
+        vkCmdPushConstants(computeCmd, cullPipelineLayout,
+                          VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                          sizeof(CullPushConstants), &material.cullParams);
+        
+        // Dispatch fine culling
+        vkCmdDispatch(computeCmd, (material.objectCount + 63) / 64, 1, 1);
+        
+        // Barrier between materials
+        vkCmdPipelineBarrier(computeCmd, /* ... */);
+    }
+    
+    vkEndCommandBuffer(computeCmd);
+    vkQueueSubmit(computeQueue, 1, &computeSubmit, cullFence);
+}
+```

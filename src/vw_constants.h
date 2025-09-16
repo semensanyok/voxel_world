@@ -2,11 +2,6 @@
 #define VW_CONSTANTS_H
 
 
-namespace BufferSettings {
-constexpr unsigned long DRAW_BUFFER_SIZE = 1000000;
-constexpr unsigned long STAGING_BUFFER_SIZE = 64 * 1024 * 1024; // 64MB per thread
-}; // namespace BufferSettings
-
 // SausageV2 legacy. TODO: refactor to single Vulkan buffer with offsets.
 // need to calculate total size based on estimated number of vertices, indices, etc.
 namespace BufferSettings_SausageV2_Legacy {

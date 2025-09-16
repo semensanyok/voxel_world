@@ -28,6 +28,24 @@ void RendererContext::drawFrame() {
   // reached the value specified by the corresponding element of
   // VkSemaphoreWaitInfo::pValues.
 
+    // 1. CPU broad phase (coarse, fast)
+    //    - Spatial queries (octree/BVH)  
+    //    - Rough distance/angle checks
+    //    - Material grouping
+    // broadPhaseCull();                    // ~1000s → ~100s objects
+    
+    // 2. Upload only broad-phase survivors
+    // asyncUploadVisible();                // Transfer reduced set
+    
+    // 3. GPU fine culling (accurate, parallel)
+    //    - Per-pixel accurate frustum tests
+    //    - Sub-pixel culling
+    //    - Occlusion queries
+    // gpuFineCulling();                    // ~100s → ~50s objects
+    
+    // 4. Render survivors
+    // renderIndirect();
+
   // 1. Wait for transfer queues to finish
   waitInfo.flags = 0;
   auto &frameSemaphores = transferSemaphores[currentFrame];
@@ -37,8 +55,6 @@ void RendererContext::drawFrame() {
   while (windowMinimizedOrHidden || (scr_width == 0 || scr_height == 0)) {
     SDL_WaitEvent(NULL);
   }
-  // 2. Start next frame's octree gathering (async)
-  startOctreeGathering(nextFrame);
   // 3. GPU compute culling (uses data uploaded last frame)
   vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                     cullPipeline);
@@ -128,7 +144,7 @@ void RendererContext::init() {
   createFramebuffers();
   drawCommandPool =
       createCommandPoolTransient(queueFamilyIndices.graphicsFamily->id);
-  createDrawBuffer();
+  createBufferLayout();
   createCommandBuffer();
   createSyncObjects();
 }
@@ -1351,17 +1367,18 @@ void RendererContext::cleanupSwapChain() {
   }
   vkDestroySwapchainKHR(device, swapChain, nullptr);
 }
-StagingBuffer* RendererContext::createStagingBuffer() {
+StagingBuffer *RendererContext::createStagingBuffer() {
   StagingBuffer *stagingBuffer = new StagingBuffer();
   stagingBuffer->buffer = VK_NULL_HANDLE;
   stagingBuffer->memory = VK_NULL_HANDLE;
 
-  createBuffer(BufferSettings::STAGING_BUFFER_SIZE, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+  createBuffer(BufferSettings::STAGING_BUFFER_SIZE,
+               VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                    VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                stagingBuffer->buffer, stagingBuffer->memory);
-  vkMapMemory(device, stagingBuffer->memory, 0, BufferSettings::STAGING_BUFFER_SIZE, 0,
-              &stagingBuffer->data);
+  vkMapMemory(device, stagingBuffer->memory, 0,
+              BufferSettings::STAGING_BUFFER_SIZE, 0, &stagingBuffer->data);
   return stagingBuffer;
 }
 // Keep mapped for the entire lifetime of the buffer
@@ -1371,19 +1388,24 @@ void RendererContext::destroyStagingBuffer(StagingBuffer *staging) {
   vkDestroyBuffer(device, staging->buffer, nullptr);
   vkFreeMemory(device, staging->memory, nullptr);
 }
-void RendererContext::createDrawBuffer() {
+void RendererContext::createBufferLayout() {
   createBuffer(
-      BufferSettings::DRAW_BUFFER_SIZE,
+      BufferSettings::DEVICE_BUFFER_SIZE,
       VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
           VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, deviceBuffer, deviceBufferMemory);
-}
-void RendererContext::createComputeBuffer() {
-    createBuffer(
-      BufferSettings::COMPUTE_BUFFER_SIZE,
-      VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
-          VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, computeBuffer, computeBufferMemory);
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 
+      bufferLayout.deviceBuffer, bufferLayout.deviceBufferMemory);
+  createBuffer(
+      BufferSettings::DYNAMIC_BUFFER_SIZE,
+      VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | 
+        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+, bufferLayout.hostVisibleBuffer, bufferLayout.hostVisibleBufferMemory);
+  vkMapMemory(device, bufferLayout.hostVisibleBufferMemory, 
+              0, // offset
+              BufferSettings::DYNAMIC_BUFFER_SIZE, //size 
+              0, // flags
+              &bufferLayout.hostVisibleData);
 }
 uint32_t RendererContext::findMemoryType(uint32_t typeFilter,
                                          VkMemoryPropertyFlags properties) {
